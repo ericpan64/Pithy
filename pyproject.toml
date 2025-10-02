@@ -1,0 +1,16 @@
+[project]
+name = "pithy-cli"
+version = "0.1.0"
+description = "Your pithy python pair programmer CLI tool"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.19.2",
+]
+
+[build-system]
+requires = ["uv", "setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+pithy = "pithy_cli.cli:app"
