@@ -1,24 +1,31 @@
 """Git operations - pure tactical functions."""
 
-import subprocess
 from pathlib import Path
 from typing import Optional
 
+from git import Repo, InvalidGitRepositoryError, GitCommandError
 
-def run_git_command(args: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    """Run a git command and return the result."""
-    return subprocess.run(
-        ["git"] + args,
-        capture_output=True,
-        text=True,
-        check=check,
-    )
+
+def get_repo() -> Optional[Repo]:
+    """Get git repository from current directory."""
+    try:
+        return Repo(".", search_parent_directories=True)
+    except InvalidGitRepositoryError:
+        return None
 
 
 def has_staged_changes() -> bool:
     """Check if there are staged changes."""
-    result = run_git_command(["diff", "--cached", "--quiet"], check=False)
-    return result.returncode != 0
+    repo = get_repo()
+    if not repo:
+        return False
+
+    try:
+        # Check if there are differences between index and HEAD
+        return len(repo.index.diff("HEAD")) > 0
+    except (GitCommandError, ValueError):
+        # No HEAD yet (new repo) - check if index has any entries
+        return len(repo.index.entries) > 0
 
 
 def get_staged_diff(max_bytes: int = 120_000) -> str:
@@ -27,42 +34,57 @@ def get_staged_diff(max_bytes: int = 120_000) -> str:
 
     If diff exceeds max_bytes, returns a summary instead.
     """
-    result = run_git_command(["diff", "--cached", "--no-color", "-U3"])
-    diff = result.stdout
+    repo = get_repo()
+    if not repo:
+        return ""
 
-    if len(diff) <= max_bytes:
-        return diff
+    try:
+        diff = repo.git.diff("--cached", "--no-color", "-U3")
 
-    # Fallback: get summary for large diffs
-    return get_staged_summary()
+        if len(diff) <= max_bytes:
+            return diff
+
+        # Fallback: get summary for large diffs
+        return get_staged_summary()
+    except GitCommandError:
+        return ""
 
 
 def get_staged_summary() -> str:
     """Get summary when diff is too large."""
-    stats = run_git_command(["diff", "--cached", "--stat"]).stdout
-    status = run_git_command(["diff", "--cached", "--name-status"]).stdout
+    repo = get_repo()
+    if not repo:
+        return ""
 
-    return f"File changes:\n{status}\n\nStats:\n{stats}"
+    try:
+        stats = repo.git.diff("--cached", "--stat")
+        status = repo.git.diff("--cached", "--name-status")
+
+        return f"File changes:\n{status}\n\nStats:\n{stats}"
+    except GitCommandError:
+        return ""
 
 
 def get_repo_name() -> str:
     """Get repository name from git root directory."""
-    result = run_git_command(["rev-parse", "--show-toplevel"], check=False)
+    repo = get_repo()
+    if not repo:
+        return "unknown"
 
-    if result.returncode == 0:
-        return Path(result.stdout.strip()).name
-
-    return "unknown"
+    return Path(repo.working_dir).name
 
 
 def get_branch_name() -> str:
     """Get current branch name."""
-    result = run_git_command(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+    repo = get_repo()
+    if not repo:
+        return "unknown"
 
-    if result.returncode == 0:
-        return result.stdout.strip()
-
-    return "unknown"
+    try:
+        return repo.active_branch.name
+    except TypeError:
+        # Detached HEAD state
+        return "HEAD"
 
 
 def read_commit_msg(path: str) -> Optional[str]:
