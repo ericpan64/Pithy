@@ -138,6 +138,7 @@ def run_init() -> None:
     # Update .gitignore
     required_entries = [
         ".pithy/",
+        ".DS_Store",
         ".specstory/",
         ".cursor*",
         ".claude*"
