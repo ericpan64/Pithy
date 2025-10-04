@@ -14,6 +14,7 @@ import getpass
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, Optional
+from enum import Enum
 
 from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -27,6 +28,27 @@ ARGON2_MEMORY = 32768
 ARGON2_ITERATIONS = 3
 ARGON2_PARALLELISM = 1
 ARGON2_KEY_LENGTH = 32
+
+
+# Provider Configuration
+
+class Provider(str, Enum):
+    """Supported API providers."""
+    ANTHROPIC = "Anthropic"
+    OPENAI = "OpenAI"
+
+
+# Provider key mapping - single source of truth
+PROVIDER_KEYS = {
+    Provider.ANTHROPIC: "Anthropic",
+    Provider.OPENAI: "OpenAI",
+}
+
+# Backward compatibility mapping
+LEGACY_KEY_NAMES = {
+    "ANTHROPIC_API_KEY": Provider.ANTHROPIC,
+    "OPENAI_API_KEY": Provider.OPENAI,
+}
 
 
 @dataclass
@@ -291,4 +313,107 @@ def unlock(ttl_hours: float = 8.0):
 def lock():
     """Lock keystore."""
     clear_cached_password()
-    print("= Locked")
+    print("= Locked")
+
+
+# Provider-specific key management
+
+def get_provider_key(provider: Provider) -> Optional[str]:
+    """
+    Get API key for a specific provider.
+
+    Checks both new standardized names and legacy names for backward compatibility.
+
+    Args:
+        provider: The provider to get the key for
+
+    Returns:
+        The API key if found, None otherwise
+    """
+    try:
+        keystore = load_keystore()
+    except FileNotFoundError:
+        return None
+
+    # Try new naming convention first
+    key_name = PROVIDER_KEYS.get(provider)
+    if key_name and key_name in keystore.keys:
+        return keystore.keys[key_name]
+
+    # Fallback to legacy names for backward compatibility
+    legacy_name = f"{provider.name}_API_KEY"
+    return keystore.keys.get(legacy_name)
+
+
+def set_provider_key(provider: Provider, value: Optional[str] = None):
+    """
+    Set API key for a specific provider using standard naming.
+
+    Args:
+        provider: The provider to set the key for
+        value: The API key value (will prompt if None)
+    """
+    key_name = PROVIDER_KEYS[provider]
+    set_key(key_name, value)
+
+
+def list_providers() -> Dict[Provider, bool]:
+    """
+    List all providers and their key availability.
+
+    Returns:
+        Dict mapping Provider to whether a key exists (new or legacy)
+    """
+    try:
+        keystore = load_keystore()
+    except FileNotFoundError:
+        return {provider: False for provider in Provider}
+
+    return {
+        provider: (
+            PROVIDER_KEYS[provider] in keystore.keys or
+            f"{provider.name}_API_KEY" in keystore.keys
+        )
+        for provider in Provider
+    }
+
+
+def migrate_legacy_keys():
+    """
+    Migrate legacy key names to new standard format.
+
+    Renames keys like:
+    - ANTHROPIC_API_KEY → Anthropic
+    - OPENAI_API_KEY → OpenAI
+
+    This is a one-time migration helper.
+    """
+    try:
+        keystore = load_keystore()
+    except FileNotFoundError:
+        print("No keystore found - nothing to migrate")
+        return
+
+    changed = False
+
+    for legacy_name, provider in LEGACY_KEY_NAMES.items():
+        if legacy_name in keystore.keys:
+            new_name = PROVIDER_KEYS[provider]
+            if new_name not in keystore.keys:
+                # Migrate the key
+                keystore.keys[new_name] = keystore.keys[legacy_name]
+                del keystore.keys[legacy_name]
+                changed = True
+                print(f"✓ Migrated {legacy_name} → {new_name}")
+            else:
+                # New key already exists - ask user which to keep
+                print(f"⚠ Both {legacy_name} and {new_name} exist")
+                print(f"  Keeping {new_name}, removing {legacy_name}")
+                del keystore.keys[legacy_name]
+                changed = True
+
+    if changed:
+        save_keystore(keystore)
+        print("Migration complete!")
+    else:
+        print("No legacy keys found to migrate")

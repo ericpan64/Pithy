@@ -3,7 +3,7 @@ from typing import Optional
 
 from .init import run_init
 from .ai_commit import run_ai_commit
-from .keys import set_key, get_key, list_keys, remove_key, unlock, lock
+from .keys import set_key, get_key, list_keys, remove_key, unlock, lock, migrate_legacy_keys, list_providers
 
 app = typer.Typer()
 keys_app = typer.Typer()
@@ -121,6 +121,31 @@ def lock_cmd() -> None:
     """Lock keystore."""
     try:
         lock()
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+@keys_app.command("migrate")
+def migrate_cmd() -> None:
+    """Migrate legacy key names to new standard format."""
+    try:
+        migrate_legacy_keys()
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+@keys_app.command("providers")
+def providers_cmd() -> None:
+    """List all providers and their key status."""
+    try:
+        from rich.console import Console
+        console = Console()
+
+        providers = list_providers()
+        console.print("\n[bold]Provider Status:[/bold]")
+        for provider, has_key in providers.items():
+            status = "[green]✓[/green]" if has_key else "[dim]✗[/dim]"
+            console.print(f"  {status} {provider.value}")
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)

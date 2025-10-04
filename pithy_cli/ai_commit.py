@@ -27,7 +27,7 @@ from .llm import (
     generate_titles,
     LLMProvider,
 )
-from .keys import get_key
+from .keys import get_provider_key, Provider
 
 console = Console()
 
@@ -48,15 +48,16 @@ def get_provider_config() -> tuple[LLMProvider, str]:
     Returns:
         Tuple of (provider, api_key)
     """
-    # Try Anthropic first
-    anthropic_key = get_key("ANTHROPIC_API_KEY")
-    if anthropic_key:
-        return LLMProvider.ANTHROPIC, anthropic_key
+    # Map Provider enum to LLMProvider enum
+    provider_map = {
+        Provider.ANTHROPIC: LLMProvider.ANTHROPIC,
+        Provider.OPENAI: LLMProvider.OPENAI,
+    }
 
-    # Try OpenAI
-    openai_key = get_key("OPENAI_API_KEY")
-    if openai_key:
-        return LLMProvider.OPENAI, openai_key
+    # Try each provider in order
+    for provider, llm_provider in provider_map.items():
+        if key := get_provider_key(provider):
+            return llm_provider, key
 
     # Check environment as fallback
     import os
@@ -65,11 +66,12 @@ def get_provider_config() -> tuple[LLMProvider, str]:
     if key := os.environ.get("OPENAI_API_KEY"):
         return LLMProvider.OPENAI, key
 
+    from .keys import PROVIDER_KEYS
     raise ValueError(
         "No API key found. Set one with:\n"
-        "  pithy keys set ANTHROPIC_API_KEY\n"
+        f"  pithy keys set {PROVIDER_KEYS[Provider.ANTHROPIC]}\n"
         "  or\n"
-        "  pithy keys set OPENAI_API_KEY"
+        f"  pithy keys set {PROVIDER_KEYS[Provider.OPENAI]}"
     )
 
 

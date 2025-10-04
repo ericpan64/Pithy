@@ -18,7 +18,9 @@ from pithy_cli.keys import (
     read_cached_password, write_cached_password, clear_cached_password,
     load_keystore, save_keystore,
     set_key, get_key, list_keys, remove_key, unlock, lock,
-    ensure_pithy_dir, PITHY_DIR, KEYSTORE_PATH, CACHE_PATH
+    ensure_pithy_dir, PITHY_DIR, KEYSTORE_PATH, CACHE_PATH,
+    Provider, PROVIDER_KEYS, LEGACY_KEY_NAMES,
+    get_provider_key, set_provider_key, list_providers, migrate_legacy_keys
 )
 from pithy_cli.cli import app
 
@@ -394,3 +396,151 @@ def test_ensure_pithy_dir_creation(tmp_path, monkeypatch):
     if os.name != 'nt':  # Unix systems
         stat = test_dir.stat()
         assert oct(stat.st_mode)[-3:] == '700'
+
+
+# Provider-specific key management tests
+
+def test_get_provider_key_new_name(temp_pithy_dir, mock_getpass):
+    """Test getting provider key with new naming convention."""
+    mock_getpass.return_value = "master_password"
+    keystore = KeyStore(keys={"Anthropic": "sk-ant-test-123"})
+    save_keystore(keystore)
+
+    key = get_provider_key(Provider.ANTHROPIC)
+    assert key == "sk-ant-test-123"
+
+
+def test_get_provider_key_legacy_name(temp_pithy_dir, mock_getpass):
+    """Test backward compatibility with legacy key names."""
+    mock_getpass.return_value = "master_password"
+    keystore = KeyStore(keys={"ANTHROPIC_API_KEY": "sk-ant-legacy-456"})
+    save_keystore(keystore)
+
+    key = get_provider_key(Provider.ANTHROPIC)
+    assert key == "sk-ant-legacy-456"
+
+
+def test_get_provider_key_prefers_new_name(temp_pithy_dir, mock_getpass):
+    """Test that new naming convention is preferred over legacy."""
+    mock_getpass.return_value = "master_password"
+    keystore = KeyStore(keys={
+        "Anthropic": "sk-ant-new",
+        "ANTHROPIC_API_KEY": "sk-ant-old"
+    })
+    save_keystore(keystore)
+
+    key = get_provider_key(Provider.ANTHROPIC)
+    assert key == "sk-ant-new"
+
+
+def test_get_provider_key_not_found(temp_pithy_dir):
+    """Test getting non-existent provider key returns None."""
+    key = get_provider_key(Provider.ANTHROPIC)
+    assert key is None
+
+
+def test_set_provider_key(temp_pithy_dir, mock_getpass):
+    """Test setting provider key with new naming convention."""
+    mock_getpass.return_value = "master_password"
+
+    set_provider_key(Provider.ANTHROPIC, "sk-ant-new-key")
+
+    keystore = load_keystore()
+    assert "Anthropic" in keystore.keys
+    assert keystore.keys["Anthropic"] == "sk-ant-new-key"
+
+
+def test_list_providers_empty(temp_pithy_dir):
+    """Test listing providers with no keys."""
+    providers = list_providers()
+
+    assert len(providers) == 2
+    assert providers[Provider.ANTHROPIC] is False
+    assert providers[Provider.OPENAI] is False
+
+
+def test_list_providers_with_keys(temp_pithy_dir, mock_getpass):
+    """Test listing providers with some keys set."""
+    mock_getpass.return_value = "master_password"
+    keystore = KeyStore(keys={
+        "Anthropic": "sk-ant-123",
+        "OPENAI_API_KEY": "sk-openai-456"  # Legacy name
+    })
+    save_keystore(keystore)
+
+    providers = list_providers()
+
+    assert providers[Provider.ANTHROPIC] is True
+    assert providers[Provider.OPENAI] is True
+
+
+def test_migrate_legacy_keys_success(temp_pithy_dir, mock_getpass, capsys):
+    """Test successful migration of legacy keys."""
+    mock_getpass.return_value = "master_password"
+    keystore = KeyStore(keys={
+        "ANTHROPIC_API_KEY": "sk-ant-legacy",
+        "OPENAI_API_KEY": "sk-openai-legacy"
+    })
+    save_keystore(keystore)
+
+    migrate_legacy_keys()
+
+    # Check output
+    captured = capsys.readouterr()
+    assert "Migrated ANTHROPIC_API_KEY → Anthropic" in captured.out
+    assert "Migrated OPENAI_API_KEY → OpenAI" in captured.out
+    assert "Migration complete!" in captured.out
+
+    # Verify keys were migrated
+    keystore = load_keystore()
+    assert "Anthropic" in keystore.keys
+    assert "OpenAI" in keystore.keys
+    assert "ANTHROPIC_API_KEY" not in keystore.keys
+    assert "OPENAI_API_KEY" not in keystore.keys
+    assert keystore.keys["Anthropic"] == "sk-ant-legacy"
+    assert keystore.keys["OpenAI"] == "sk-openai-legacy"
+
+
+def test_migrate_legacy_keys_no_legacy(temp_pithy_dir, mock_getpass, capsys):
+    """Test migration when no legacy keys exist."""
+    mock_getpass.return_value = "master_password"
+    keystore = KeyStore(keys={"Anthropic": "sk-ant-new"})
+    save_keystore(keystore)
+
+    migrate_legacy_keys()
+
+    captured = capsys.readouterr()
+    assert "No legacy keys found to migrate" in captured.out
+
+
+def test_migrate_legacy_keys_conflict(temp_pithy_dir, mock_getpass, capsys):
+    """Test migration when both old and new keys exist."""
+    mock_getpass.return_value = "master_password"
+    keystore = KeyStore(keys={
+        "Anthropic": "sk-ant-new",
+        "ANTHROPIC_API_KEY": "sk-ant-old"
+    })
+    save_keystore(keystore)
+
+    migrate_legacy_keys()
+
+    captured = capsys.readouterr()
+    assert "Both ANTHROPIC_API_KEY and Anthropic exist" in captured.out
+    assert "Keeping Anthropic, removing ANTHROPIC_API_KEY" in captured.out
+
+    # Verify new key is kept, legacy is removed
+    keystore = load_keystore()
+    assert "Anthropic" in keystore.keys
+    assert "ANTHROPIC_API_KEY" not in keystore.keys
+    assert keystore.keys["Anthropic"] == "sk-ant-new"
+
+
+def test_migrate_legacy_keys_no_keystore(temp_pithy_dir, capsys):
+    """Test migration when no keystore exists."""
+    # Don't create a keystore - temp_pithy_dir is empty
+    migrate_legacy_keys()
+
+    captured = capsys.readouterr()
+    # When no keystore file exists, load_keystore() returns empty KeyStore
+    # So migration just says no legacy keys found
+    assert "No legacy keys found to migrate" in captured.out

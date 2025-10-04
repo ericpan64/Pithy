@@ -146,7 +146,7 @@ if [ -c /dev/tty ] 2>/dev/null; then
 fi
 
 # Call pithy ai-commit hook
-pithy ai-commit hook --file "$1" ${{2:+--source "$2"}} --titles {titles}
+pithy ai-commit hook "$1" ${{2:+--source "$2"}} --titles {titles}
 """
 
     hook_path.write_text(hook_content)
