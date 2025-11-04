@@ -139,6 +139,24 @@ Return as JSON:
 
 Return ONLY valid JSON."""
 
+FILE_SUMMARY_PROMPT = """Summarize the following source file.
+
+Path: {rel_path}
+Language: {language}
+
+CONTENT:
+```
+{content}
+```
+
+REQUIREMENTS:
+- Return Markdown ONLY (no code fences, no extra text).
+- First line: '## {rel_path}'
+- Then a '### Key Points' section with 5–10 bullets, each ≤100 characters.
+- Optional '### Notes' section for caveats or TODOs.
+- Focus on purpose, responsibilities, key functions/classes, inputs/outputs, dependencies, side effects, and risks.
+"""
+
 
 def generate_summary(
     client: LLMClient,
@@ -211,3 +229,32 @@ def generate_titles(
             "feat: add new functionality",
             "fix: resolve issues",
         ][:count]
+
+
+def summarize_source_file(
+    client: LLMClient,
+    rel_path: str,
+    language: str,
+    content: str,
+) -> str:
+    """
+    Generate markdown summary of a source file via LLM.
+
+    Pure function - delegates I/O to client.
+    """
+    prompt = FILE_SUMMARY_PROMPT.format(
+        rel_path=rel_path,
+        language=language,
+        content=content[:120000],  # Truncate to stay within limits
+    )
+
+    response = client.complete(prompt, max_tokens=800)
+
+    # Strip surrounding code fences if model added them
+    cleaned = response.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.split("\n")
+        if len(lines) > 2:
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+    return cleaned

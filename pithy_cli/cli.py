@@ -1,9 +1,10 @@
 import typer
-from typing import Optional
+from typing import Optional, List
 
 from .init import run_init
 from .ai_commit import run_ai_commit
 from .keys import set_key, get_key, list_keys, remove_key, unlock, lock, migrate_legacy_keys, list_providers
+from .summarize import run_summarize
 
 app = typer.Typer()
 keys_app = typer.Typer()
@@ -16,6 +17,33 @@ app.add_typer(ai_commit_app, name="ai-commit", help="AI-powered commit messages"
 def init() -> None:
     typer.echo("Running `init`")
     run_init()
+
+
+@app.command()
+def summarize(
+    path: str = typer.Argument(".", help="File or directory to summarize"),
+    exclude: List[str] = typer.Option(None, "--exclude", "-x", help="Glob patterns to exclude"),
+    depth: int = typer.Option(-1, "--depth", help="Max recursion depth (-1 = unlimited)"),
+    force: bool = typer.Option(False, "--force", help="Regenerate even if up-to-date"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show actions without writing"),
+    max_file_bytes: int = typer.Option(120_000, "--max-file-bytes", help="Read limit per file"),
+    quiet: bool = typer.Option(False, "--quiet", help="Reduce output"),
+) -> None:
+    """Generate structured markdown summaries of files and directories."""
+    try:
+        run_summarize(
+            target=path,
+            excludes=exclude or [],
+            depth=depth,
+            force=force,
+            dry_run=dry_run,
+            max_file_bytes=max_file_bytes,
+            quiet=quiet,
+        )
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
 
 # AI Commit commands
 
