@@ -31,16 +31,35 @@ pithy summarize .
 
 #### Output Structure
 
-Summaries are written to the `.pithy/` directory at your git repository root, mirroring your source tree structure:
+Summaries are written to timestamped subdirectories under `.pithy/summarize/` at your git repository root. Each run creates a new timestamp directory in the format `YYYY-MM-DD_HH-MM-SS`:
 
-- **File summaries**: `.pithy/<relative_path>.<ext>.md`
-  - Example: `src/app.py` → `.pithy/src/app.py.md`
+```
+.pithy/
+└── summarize/
+    ├── 2025-01-15_14-30-22/
+    │   ├── src/
+    │   │   ├── app.py.md
+    │   │   ├── utils.py.md
+    │   │   └── _meta.md
+    │   └── README.md.md
+    └── 2025-01-15_15-45-10/
+        └── ...
+```
+
+- **File summaries**: `.pithy/summarize/<timestamp>/<relative_path>.<ext>.md`
+  - Example: `src/app.py` → `.pithy/summarize/2025-01-15_14-30-22/src/app.py.md`
   - Contains AI-generated summary with key points, purpose, dependencies, and notes
 
-- **Directory meta**: `.pithy/<relative_path>/_meta.md`
+- **Directory meta**: `.pithy/summarize/<timestamp>/<relative_path>/_meta.md`
   - Aggregates immediate files with one-line synopses
   - References subdirectories via links to their `_meta.md` files
   - Generated programmatically (no LLM calls)
+
+**Benefits of timestamped directories:**
+- Track evolution of your codebase over time
+- Compare summaries from different points in development
+- Never overwrite previous summaries
+- Easy to identify when summaries were generated
 
 #### Options
 
@@ -53,10 +72,13 @@ Summaries are written to the `.pithy/` directory at your git repository root, mi
 | `--dry-run` | `False` | Show planned actions without writing files |
 | `--max-file-bytes` | `120000` | Read limit per file (caps token usage) |
 | `--quiet` | `False` | Reduce console output |
+| `--include-ignored` | `False` | Process gitignored files |
 
 #### Default Exclusions
 
-The following patterns are automatically excluded:
+**Gitignored files** are automatically excluded by default. The summarize command respects your `.gitignore` file(s) and skips any files or directories that git would ignore. Use `--include-ignored` to override this behavior.
+
+Additionally, the following patterns are always excluded:
 - `.git/`, `.pithy/`
 - `node_modules/`, `dist/`, `build/`, `.venv/`
 - `*.lock`, `*.min.*`
@@ -86,6 +108,34 @@ pithy summarize src/ --dry-run
 **Quiet mode for scripting:**
 ```bash
 pithy summarize . --quiet
+```
+
+**Include gitignored files:**
+```bash
+pithy summarize . --include-ignored
+# Processes everything, including files matched by .gitignore
+```
+
+#### Gitignore Integration
+
+By default, `pithy summarize` respects your `.gitignore` files:
+- Files and directories matched by `.gitignore` patterns are automatically skipped
+- Nested `.gitignore` files are respected (follows git's hierarchy)
+- Works seamlessly with your existing git workflow
+- Use `--include-ignored` to process ignored files when needed (e.g., for documentation of build artifacts)
+
+**Example:**
+```bash
+# .gitignore contains:
+# build/
+# *.pyc
+# .env
+
+# Default behavior - skips build/, *.pyc, .env
+pithy summarize .
+
+# Process everything, including gitignored files
+pithy summarize . --include-ignored
 ```
 
 #### Incremental Updates

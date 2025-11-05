@@ -28,6 +28,7 @@ def summarize(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show actions without writing"),
     max_file_bytes: int = typer.Option(120_000, "--max-file-bytes", help="Read limit per file"),
     quiet: bool = typer.Option(False, "--quiet", help="Reduce output"),
+    include_ignored: bool = typer.Option(False, "--include-ignored", help="Process gitignored files"),
 ) -> None:
     """Generate structured markdown summaries of files and directories."""
     try:
@@ -39,6 +40,7 @@ def summarize(
             dry_run=dry_run,
             max_file_bytes=max_file_bytes,
             quiet=quiet,
+            include_ignored=include_ignored,
         )
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)

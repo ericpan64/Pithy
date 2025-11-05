@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import mimetypes
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Tuple
 
@@ -25,6 +26,11 @@ DEFAULT_EXCLUDES = [
 ]
 
 
+def _get_timestamp() -> str:
+    """Generate timestamp string in YYYY-MM-DD_HH-MM-SS format."""
+    return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+
 @dataclass
 class SummarizeOptions:
     """Configuration options for summarization."""
@@ -35,6 +41,7 @@ class SummarizeOptions:
     dry_run: bool
     max_file_bytes: int
     quiet: bool
+    include_ignored: bool
 
 
 def run_summarize(
@@ -45,6 +52,7 @@ def run_summarize(
     dry_run: bool = False,
     max_file_bytes: int = 120_000,
     quiet: bool = False,
+    include_ignored: bool = False,
 ) -> None:
     """
     Generate structured markdown summaries of files and directories.
@@ -57,6 +65,7 @@ def run_summarize(
         dry_run: Show actions without writing
         max_file_bytes: Maximum bytes to read per file
         quiet: Reduce console output
+        include_ignored: Process gitignored files (default: False)
     """
     src_path = Path(target).resolve()
 
@@ -65,7 +74,14 @@ def run_summarize(
 
     # Find git root or fallback to current directory
     git_root = find_git_root() or Path.cwd()
-    pithy_root = ensure_pithy_directory(git_root)
+    pithy_base = ensure_pithy_directory(git_root)
+
+    # Create timestamped output directory under .pithy/summarize/
+    timestamp = _get_timestamp()
+    summarize_base = pithy_base / "summarize"
+    summarize_base.mkdir(exist_ok=True)
+    pithy_root = summarize_base / timestamp
+    pithy_root.mkdir(parents=True, exist_ok=True)
 
     options = SummarizeOptions(
         excludes=(excludes or []) + DEFAULT_EXCLUDES,
@@ -74,6 +90,7 @@ def run_summarize(
         dry_run=dry_run,
         max_file_bytes=max_file_bytes,
         quiet=quiet,
+        include_ignored=include_ignored,
     )
 
     # Get LLM client
@@ -83,17 +100,18 @@ def run_summarize(
     if not options.quiet:
         typer.echo(f"📍 Git root: {git_root}")
         typer.echo(f"📁 Output directory: {pithy_root}")
+        typer.echo(f"🕒 Timestamp: {timestamp}")
 
     if src_path.is_file():
         rel = _relative_to(src_path, git_root)
-        _summarize_file(client, git_root, pithy_root, rel, options)
+        _summarize_file(client, git_root, pithy_root, rel, options, git_root)
         if not options.quiet:
             typer.echo(f"✅ Summarized file: {rel}")
         return
 
     if src_path.is_dir():
         rel_dir = _relative_to(src_path, git_root)
-        _summarize_dir(client, git_root, pithy_root, rel_dir, options, current_depth=0)
+        _summarize_dir(client, git_root, pithy_root, rel_dir, options, current_depth=0, git_root_for_ignore=git_root)
         if not options.quiet:
             typer.echo(f"✅ Summarized directory: {rel_dir}")
         return
@@ -109,6 +127,38 @@ def _relative_to(path: Path, root: Path) -> Path:
         return path.relative_to(root)
     except ValueError:
         return Path(path.name)
+
+
+def _is_gitignored(path: Path, git_root: Path) -> bool:
+    """
+    Check if path is gitignored using GitPython.
+
+    Args:
+        path: Absolute path to check
+        git_root: Git repository root
+
+    Returns:
+        True if path is gitignored, False otherwise
+    """
+    try:
+        from git import Repo
+        repo = Repo(git_root)
+
+        # Get relative path for git check
+        try:
+            rel_path = str(path.relative_to(git_root))
+        except ValueError:
+            # Path outside git root - not gitignored
+            return False
+
+        # Check if ignored
+        # GitPython's ignored() method returns list of paths that match
+        ignored = repo.ignored(rel_path)
+        return bool(ignored)
+    except Exception:
+        # No git repo, error reading .gitignore, or other issue
+        # Default to not excluding the file
+        return False
 
 
 def _matches_excludes(rel: Path, is_dir: bool, patterns: Iterable[str]) -> bool:
@@ -251,6 +301,7 @@ def _summarize_file(
     pithy_root: Path,
     rel_file: Path,
     opts: SummarizeOptions,
+    git_root_for_ignore: Path,
 ) -> None:
     """
     Summarize a single file.
@@ -261,12 +312,19 @@ def _summarize_file(
         pithy_root: Output directory root
         rel_file: Relative path of file to summarize
         opts: Summarization options
+        git_root_for_ignore: Git root for gitignore checks
     """
     src = git_root / rel_file
     dest = _dest_for_file(pithy_root, rel_file)
 
     # Check exclusions
     if _matches_excludes(rel_file, is_dir=False, patterns=opts.excludes):
+        return
+
+    # Check gitignore
+    if not opts.include_ignored and _is_gitignored(src, git_root_for_ignore):
+        if not opts.quiet:
+            typer.echo(f"⏭️  Skipping (gitignored): {rel_file}")
         return
 
     # Check if binary
@@ -322,6 +380,7 @@ def _summarize_dir(
     rel_dir: Path,
     opts: SummarizeOptions,
     current_depth: int,
+    git_root_for_ignore: Path,
 ) -> None:
     """
     Recursively summarize a directory.
@@ -336,6 +395,7 @@ def _summarize_dir(
         rel_dir: Relative path of directory to summarize
         opts: Summarization options
         current_depth: Current recursion depth
+        git_root_for_ignore: Git root for gitignore checks
     """
     # Check depth limit
     if opts.depth >= 0 and current_depth > opts.depth:
@@ -346,6 +406,13 @@ def _summarize_dir(
         return
 
     src_dir = git_root / rel_dir
+
+    # Check gitignore for directory
+    if not opts.include_ignored and _is_gitignored(src_dir, git_root_for_ignore):
+        if not opts.quiet:
+            typer.echo(f"⏭️  Skipping (gitignored): {rel_dir}/")
+        return
+
     if not src_dir.exists() or not src_dir.is_dir():
         return
 
@@ -364,7 +431,7 @@ def _summarize_dir(
 
         if entry.is_dir():
             # Recurse into subdirectory first
-            _summarize_dir(client, git_root, pithy_root, rel, opts, current_depth + 1)
+            _summarize_dir(client, git_root, pithy_root, rel, opts, current_depth + 1, git_root_for_ignore)
 
             # Add reference to subdirectory meta
             meta_path = _dest_meta_for_dir(pithy_root, rel)
@@ -373,7 +440,7 @@ def _summarize_dir(
 
         elif entry.is_file():
             # Summarize file
-            _summarize_file(client, git_root, pithy_root, rel, opts)
+            _summarize_file(client, git_root, pithy_root, rel, opts, git_root_for_ignore)
 
             # Try to extract first bullet for listing
             try:
