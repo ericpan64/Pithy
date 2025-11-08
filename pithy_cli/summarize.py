@@ -11,8 +11,9 @@ from typing import Iterable, List, Tuple
 
 import typer
 from .init import find_git_root, ensure_pithy_directory
-from .ai_commit import get_provider_config
+from .config import get_provider_config
 from .llm import create_llm_client, LLMClient, summarize_source_file
+from .constants import MAX_FILE_BYTES, BINARY_DETECTION_SAMPLE_BYTES
 
 DEFAULT_EXCLUDES = [
     ".git/",
@@ -50,7 +51,7 @@ def run_summarize(
     depth: int = -1,
     force: bool = False,
     dry_run: bool = False,
-    max_file_bytes: int = 120_000,
+    max_file_bytes: int = MAX_FILE_BYTES,
     quiet: bool = False,
     include_ignored: bool = False,
 ) -> None:
@@ -191,7 +192,7 @@ def _matches_excludes(rel: Path, is_dir: bool, patterns: Iterable[str]) -> bool:
     return False
 
 
-def _is_text_file(path: Path, sample_bytes: int = 4096) -> bool:
+def _is_text_file(path: Path, sample_bytes: int = BINARY_DETECTION_SAMPLE_BYTES) -> bool:
     """
     Heuristic to detect if a file is text (not binary).
 
