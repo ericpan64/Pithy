@@ -5,13 +5,16 @@ from .init import run_init
 from .ai_commit import run_ai_commit
 from .keys import set_key, get_key, list_keys, remove_key, unlock, lock, migrate_legacy_keys, list_providers
 from .summarize import run_summarize
+from .prompts import add_prompt, list_prompts, improve_prompt
 
 app = typer.Typer()
 keys_app = typer.Typer()
 ai_commit_app = typer.Typer()
+prompts_app = typer.Typer()
 
 app.add_typer(keys_app, name="keys", help="Key management commands")
 app.add_typer(ai_commit_app, name="ai-commit", help="AI-powered commit messages")
+app.add_typer(prompts_app, name="prompts", help="Saved prompts management")
 
 @app.command()
 def init() -> None:
@@ -95,6 +98,43 @@ def generate(
     except Exception as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+# Prompts commands
+
+@prompts_app.command()
+def add(
+    prompt_name: str = typer.Argument(..., help="Name of the prompt"),
+    prompt_text: str = typer.Argument(..., help="Content of the prompt"),
+) -> None:
+    """Add a new version of a prompt."""
+    try:
+        add_prompt(prompt_name, prompt_text)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+@prompts_app.command("list")
+def list_prompts_cmd() -> None:
+    """List all saved prompts."""
+    try:
+        list_prompts()
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+@prompts_app.command()
+def improve(
+    prompt_name: str = typer.Argument(..., help="Name of the prompt to improve"),
+    suggestions: str = typer.Argument(..., help="Suggestions for improvement"),
+) -> None:
+    """Improve an existing prompt using AI."""
+    try:
+        improve_prompt(prompt_name, suggestions)
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1)
+
+# Keys commands
 
 @keys_app.command()
 def set(name: str, value: Optional[str] = None) -> None:
