@@ -5,6 +5,13 @@ from enum import Enum
 from typing import Protocol
 from dataclasses import dataclass
 
+from .constants import (
+    LLM_MAX_TOKENS_STANDARD,
+    LLM_MAX_TOKENS_FILE_SUMMARY,
+    LLM_TEMPERATURE,
+    MAX_DIFF_BYTES,
+)
+
 
 class LLMProvider(str, Enum):
     """Supported LLM providers."""
@@ -25,7 +32,7 @@ class AnthropicClient:
     """Anthropic Claude client."""
     api_key: str
 
-    def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    def complete(self, prompt: str, max_tokens: int = LLM_MAX_TOKENS_STANDARD) -> str:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.api_key)
@@ -33,7 +40,7 @@ class AnthropicClient:
         response = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=max_tokens,
-            temperature=0.3,
+            temperature=LLM_TEMPERATURE,
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -45,7 +52,7 @@ class OpenAIClient:
     """OpenAI GPT client."""
     api_key: str
 
-    def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    def complete(self, prompt: str, max_tokens: int = LLM_MAX_TOKENS_STANDARD) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key)
@@ -53,7 +60,7 @@ class OpenAIClient:
         response = client.chat.completions.create(
             model="gpt-4o",
             max_tokens=max_tokens,
-            temperature=0.3,
+            temperature=LLM_TEMPERATURE,
             messages=[{"role": "user", "content": prompt}],
         )
 
@@ -68,6 +75,29 @@ def create_llm_client(provider: LLMProvider, api_key: str) -> LLMClient:
         return OpenAIClient(api_key=api_key)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
+
+
+def _parse_json_response(response: str) -> dict:
+    """
+    Parse JSON response from LLM, handling markdown code blocks.
+
+    Args:
+        response: Raw LLM response that may contain JSON
+
+    Returns:
+        Parsed JSON as dictionary
+
+    Raises:
+        json.JSONDecodeError: If response is not valid JSON
+    """
+    cleaned = response.strip()
+
+    # Remove markdown code blocks if present
+    if cleaned.startswith("```"):
+        lines = cleaned.split("\n")
+        cleaned = "\n".join(lines[1:-1])
+
+    return json.loads(cleaned)
 
 
 # Prompts
@@ -172,20 +202,14 @@ def generate_summary(
     prompt = SUMMARY_PROMPT.format(
         repo_name=repo_name,
         branch=branch,
-        diff=diff[:120000],  # Truncate to stay within limits
+        diff=diff[:MAX_DIFF_BYTES],
     )
 
-    response = client.complete(prompt, max_tokens=500)
+    response = client.complete(prompt, max_tokens=LLM_MAX_TOKENS_STANDARD)
 
     # Parse JSON response
     try:
-        # Remove markdown code blocks if present
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            cleaned = "\n".join(lines[1:-1])
-
-        data = json.loads(cleaned)
+        data = _parse_json_response(response)
         return data.get("summary", ["Changes to the codebase"])
     except json.JSONDecodeError:
         # Fallback if JSON parsing fails
@@ -209,17 +233,11 @@ def generate_titles(
         count=count,
     )
 
-    response = client.complete(prompt, max_tokens=500)
+    response = client.complete(prompt, max_tokens=LLM_MAX_TOKENS_STANDARD)
 
     # Parse JSON response
     try:
-        # Remove markdown code blocks if present
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            cleaned = "\n".join(lines[1:-1])
-
-        data = json.loads(cleaned)
+        data = _parse_json_response(response)
         titles = data.get("titles", [])
         return titles[:count]
     except json.JSONDecodeError:
@@ -245,10 +263,10 @@ def summarize_source_file(
     prompt = FILE_SUMMARY_PROMPT.format(
         rel_path=rel_path,
         language=language,
-        content=content[:120000],  # Truncate to stay within limits
+        content=content[:MAX_DIFF_BYTES],
     )
 
-    response = client.complete(prompt, max_tokens=800)
+    response = client.complete(prompt, max_tokens=LLM_MAX_TOKENS_FILE_SUMMARY)
 
     # Strip surrounding code fences if model added them
     cleaned = response.strip()

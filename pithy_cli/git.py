@@ -5,6 +5,8 @@ from typing import Optional
 
 from git import Repo, InvalidGitRepositoryError, GitCommandError
 
+from .constants import MAX_DIFF_BYTES, GIT_DIFF_CONTEXT_LINES
+
 
 def get_repo() -> Optional[Repo]:
     """Get git repository from current directory."""
@@ -28,7 +30,7 @@ def has_staged_changes() -> bool:
         return len(repo.index.entries) > 0
 
 
-def get_staged_diff(max_bytes: int = 120_000) -> str:
+def get_staged_diff(max_bytes: int = MAX_DIFF_BYTES) -> str:
     """
     Get staged diff with size limit.
 
@@ -39,7 +41,7 @@ def get_staged_diff(max_bytes: int = 120_000) -> str:
         return ""
 
     try:
-        diff = repo.git.diff("--cached", "--no-color", "-U3")
+        diff = repo.git.diff("--cached", "--no-color", f"-U{GIT_DIFF_CONTEXT_LINES}")
 
         if len(diff) <= max_bytes:
             return diff

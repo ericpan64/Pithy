@@ -19,15 +19,19 @@ from enum import Enum
 from argon2.low_level import hash_secret_raw, Type
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 
+from .constants import (
+    DEFAULT_PASSWORD_CACHE_TTL_SECONDS,
+    ARGON2_MEMORY_COST_KB,
+    ARGON2_TIME_COST_ITERATIONS,
+    ARGON2_PARALLELISM,
+    ARGON2_KEY_LENGTH_BYTES,
+    SALT_LENGTH_BYTES,
+    NONCE_LENGTH_BYTES,
+)
+
 PITHY_DIR = Path.home() / ".pithy"
 KEYSTORE_PATH = PITHY_DIR / "keys"
 CACHE_PATH = PITHY_DIR / ".cache"
-DEFAULT_TTL = 8 * 60 * 60  # 8 hours
-
-ARGON2_MEMORY = 32768
-ARGON2_ITERATIONS = 3
-ARGON2_PARALLELISM = 1
-ARGON2_KEY_LENGTH = 32
 
 
 # Provider Configuration
@@ -79,22 +83,22 @@ def ensure_pithy_dir():
 
 def encrypt_keystore(keystore: KeyStore, password: str) -> EncryptedKeyStore:
     """Encrypt keystore with Argon2id + ChaCha20-Poly1305."""
-    salt = os.urandom(16)
+    salt = os.urandom(SALT_LENGTH_BYTES)
 
     key = hash_secret_raw(
         secret=password.encode('utf-8'),
         salt=salt,
-        time_cost=ARGON2_ITERATIONS,
-        memory_cost=ARGON2_MEMORY,
+        time_cost=ARGON2_TIME_COST_ITERATIONS,
+        memory_cost=ARGON2_MEMORY_COST_KB,
         parallelism=ARGON2_PARALLELISM,
-        hash_len=ARGON2_KEY_LENGTH,
+        hash_len=ARGON2_KEY_LENGTH_BYTES,
         type=Type.ID
     )
 
     plaintext = json.dumps(keystore.keys).encode('utf-8')
 
     cipher = ChaCha20Poly1305(key)
-    nonce = os.urandom(12)
+    nonce = os.urandom(NONCE_LENGTH_BYTES)
     ciphertext = cipher.encrypt(nonce, plaintext, None)
 
     return EncryptedKeyStore(
@@ -112,10 +116,10 @@ def decrypt_keystore(encrypted: EncryptedKeyStore, password: str) -> KeyStore:
     key = hash_secret_raw(
         secret=password.encode('utf-8'),
         salt=salt,
-        time_cost=ARGON2_ITERATIONS,
-        memory_cost=ARGON2_MEMORY,
+        time_cost=ARGON2_TIME_COST_ITERATIONS,
+        memory_cost=ARGON2_MEMORY_COST_KB,
         parallelism=ARGON2_PARALLELISM,
-        hash_len=ARGON2_KEY_LENGTH,
+        hash_len=ARGON2_KEY_LENGTH_BYTES,
         type=Type.ID
     )
 
@@ -146,12 +150,12 @@ def read_cached_password() -> Optional[str]:
         else:
             CACHE_PATH.unlink(missing_ok=True)
             return None
-    except:
+    except (json.JSONDecodeError, KeyError, OSError):
         CACHE_PATH.unlink(missing_ok=True)
         return None
 
 
-def write_cached_password(password: str, ttl_seconds: int = DEFAULT_TTL):
+def write_cached_password(password: str, ttl_seconds: int = DEFAULT_PASSWORD_CACHE_TTL_SECONDS):
     """Cache password with TTL."""
     ensure_pithy_dir()
 
@@ -171,6 +175,25 @@ def clear_cached_password():
     CACHE_PATH.unlink(missing_ok=True)
 
 
+def _prompt_for_password(prompt_text: str = "Master password: ") -> str:
+    """
+    Prompt user for password with validation.
+
+    Args:
+        prompt_text: Text to display when prompting
+
+    Returns:
+        Non-empty password string
+
+    Raises:
+        ValueError: If password is empty
+    """
+    password = getpass.getpass(prompt_text)
+    if not password.strip():
+        raise ValueError("Password cannot be empty")
+    return password
+
+
 def load_keystore() -> KeyStore:
     """Load and decrypt keystore."""
     if not KEYSTORE_PATH.exists():
@@ -183,12 +206,10 @@ def load_keystore() -> KeyStore:
             content = json.loads(KEYSTORE_PATH.read_text())
             encrypted = EncryptedKeyStore(**content)
             return decrypt_keystore(encrypted, password)
-        except:
+        except (json.JSONDecodeError, ValueError, OSError):
             clear_cached_password()
 
-    password = getpass.getpass("Master password: ")
-    if not password.strip():
-        raise ValueError("Password cannot be empty")
+    password = _prompt_for_password()
 
     content = json.loads(KEYSTORE_PATH.read_text())
     encrypted = EncryptedKeyStore(**content)
@@ -207,9 +228,7 @@ def save_keystore(keystore: KeyStore):
     password = read_cached_password()
 
     if not password:
-        password = getpass.getpass("Master password: ")
-        if not password.strip():
-            raise ValueError("Password cannot be empty")
+        password = _prompt_for_password()
         write_cached_password(password)
 
     encrypted = encrypt_keystore(keystore, password)
@@ -295,9 +314,7 @@ def remove_key(name: str):
 
 def unlock(ttl_hours: float = 8.0):
     """Unlock keystore."""
-    password = getpass.getpass("Master password: ")
-    if not password.strip():
-        raise ValueError("Password cannot be empty")
+    password = _prompt_for_password()
 
     if KEYSTORE_PATH.exists():
         content = json.loads(KEYSTORE_PATH.read_text())
