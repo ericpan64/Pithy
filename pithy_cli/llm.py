@@ -33,7 +33,7 @@ class AnthropicClient:
         client = Anthropic(api_key=self.api_key)
 
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5-20250929",
             max_tokens=max_tokens,
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}],
@@ -53,7 +53,7 @@ class OpenAIClient:
         client = OpenAI(api_key=self.api_key)
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5-mini",
             max_tokens=max_tokens,
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}],
