@@ -12,7 +12,7 @@ from typing import Iterable, List, Tuple
 import typer
 from .init import find_git_root, ensure_pithy_directory
 from .ai_commit import get_provider_config
-from .llm import create_llm_client, LLMClient, summarize_source_file
+from .llm import create_llm_client, LLMClient, summarize_source_file, ModelType
 
 DEFAULT_EXCLUDES = [
     ".git/",
@@ -95,7 +95,7 @@ def run_summarize(
 
     # Get LLM client
     provider, api_key = get_provider_config()
-    client = create_llm_client(provider, api_key)
+    client = create_llm_client(provider, api_key, model_type=ModelType.FAST)
 
     if not options.quiet:
         typer.echo(f"📍 Git root: {git_root}")

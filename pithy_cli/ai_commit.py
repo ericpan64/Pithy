@@ -26,6 +26,7 @@ from .llm import (
     generate_summary,
     generate_titles,
     LLMProvider,
+    ModelType,
 )
 from .keys import get_provider_key, Provider
 
@@ -95,7 +96,7 @@ def generate_commit_message(
 
     # Get LLM configuration
     provider, api_key = get_provider_config()
-    client = create_llm_client(provider, api_key)
+    client = create_llm_client(provider, api_key, model_type=ModelType.REGULAR)
 
     # Phase 1: Generate summary from diff
     with console.status("[bold green]Analyzing changes...", spinner="dots"):

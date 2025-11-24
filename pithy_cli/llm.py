@@ -14,6 +14,12 @@ class LLMProvider(str, Enum):
     OPENAI = "openai"
 
 
+class ModelType(str, Enum):
+    """Model speed/capability trade-off."""
+    REGULAR = "regular"  # Higher capability, slower/more expensive
+    FAST = "fast"       # Lower capability, faster/cheaper
+
+
 class LLMClient(Protocol):
     """Protocol for LLM clients."""
 
@@ -26,14 +32,19 @@ class LLMClient(Protocol):
 class AnthropicClient:
     """Anthropic Claude client."""
     api_key: str
+    model_type: ModelType = ModelType.REGULAR
 
     def complete(self, prompt: str, max_tokens: int = 500) -> str:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.api_key)
 
+        model = "claude-sonnet-4-5-20250929"
+        if self.model_type == ModelType.FAST:
+            model = "claude-haiku-4-5-20251001"
+
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model=model,
             max_tokens=max_tokens,
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}],
@@ -46,14 +57,19 @@ class AnthropicClient:
 class OpenAIClient:
     """OpenAI GPT client."""
     api_key: str
+    model_type: ModelType = ModelType.REGULAR
 
     def complete(self, prompt: str, max_tokens: int = 500) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key)
 
+        model = "gpt-5-mini-2025-08-07"
+        if self.model_type == ModelType.FAST:
+            model = "gpt-5-nano-2025-08-07"
+
         response = client.chat.completions.create(
-            model="gpt-5-mini",
+            model=model,
             max_tokens=max_tokens,
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}],
@@ -62,12 +78,16 @@ class OpenAIClient:
         return response.choices[0].message.content
 
 
-def create_llm_client(provider: LLMProvider, api_key: str) -> LLMClient:
+def create_llm_client(
+    provider: LLMProvider,
+    api_key: str,
+    model_type: ModelType = ModelType.REGULAR,
+) -> LLMClient:
     """Factory function to create LLM client."""
     if provider == LLMProvider.ANTHROPIC:
-        return AnthropicClient(api_key=api_key)
+        return AnthropicClient(api_key=api_key, model_type=model_type)
     elif provider == LLMProvider.OPENAI:
-        return OpenAIClient(api_key=api_key)
+        return OpenAIClient(api_key=api_key, model_type=model_type)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
