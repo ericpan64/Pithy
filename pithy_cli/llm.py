@@ -5,6 +5,8 @@ from enum import Enum
 from typing import Protocol
 from dataclasses import dataclass
 
+from .prompts import SUMMARY_PROMPT, TITLES_PROMPT, FILE_SUMMARY_PROMPT
+
 
 class LLMProvider(str, Enum):
     """Supported LLM providers."""
@@ -70,92 +72,7 @@ def create_llm_client(provider: LLMProvider, api_key: str) -> LLMClient:
         raise ValueError(f"Unsupported provider: {provider}")
 
 
-# Prompts
-
-SUMMARY_PROMPT = """Analyze the following git diff and provide a concise summary of the changes.
-
-Repository: {repo_name}
-Branch: {branch}
-
-Staged changes (git diff):
-```
-{diff}
-```
-
-REQUIREMENTS:
-1. Create a bullet-point summary (3-7 points) describing what changed
-2. Each bullet point MUST be 50 characters or less for brevity
-3. Add sub-bullets (indented with "  - ") for elaboration only if essential
-4. Focus on the "what" and "why", not implementation details
-5. Be concise but descriptive
-6. Use present tense
-7. Prefer elegance and brevity over verbose descriptions
-
-Return your response as JSON in this EXACT format:
-{{
-  "summary": [
-    "Brief change description (≤50 chars)",
-    "  - Sub-bullet for elaboration if needed",
-    "Another brief change (≤50 chars)"
-  ]
-}}
-
-Return ONLY valid JSON, no other text or markdown."""
-
-TITLES_PROMPT = """Based on the following summary of changes, generate conventional commit message titles.
-
-Summary of changes:
-{summary_text}
-
-REQUIREMENTS:
-1. Generate exactly {count} conventional commit titles
-2. Format: type(scope): lowercase description in present tense
-3. Keep titles under 72 characters total
-4. Use present tense ("add" not "added")
-5. Make each title represent a different aspect or perspective
-
-Conventional commit types:
-- feat: A new feature
-- fix: A bug fix
-
-Conventional commit annotations:
-- docs: Documentation only changes
-- style: Code style changes (formatting, etc)
-- refactor: Code refactoring
-- perf: Performance improvements
-- test: Adding or correcting tests
-- build: Build system changes
-- ci: CI configuration changes
-- chore: Other changes
-- revert: Reverts a previous commit
-
-Return as JSON:
-{{
-  "titles": [
-    "type(scope): description",
-    "type: another description"
-  ]
-}}
-
-Return ONLY valid JSON."""
-
-FILE_SUMMARY_PROMPT = """Summarize the following source file.
-
-Path: {rel_path}
-Language: {language}
-
-CONTENT:
-```
-{content}
-```
-
-REQUIREMENTS:
-- Return Markdown ONLY (no code fences, no extra text).
-- First line: '## {rel_path}'
-- Then a '### Key Points' section with 5–10 bullets, each ≤100 characters.
-- Optional '### Notes' section for caveats or TODOs.
-- Focus on purpose, responsibilities, key functions/classes, inputs/outputs, dependencies, side effects, and risks.
-"""
+# Prompts moved to prompts.py
 
 
 def generate_summary(
