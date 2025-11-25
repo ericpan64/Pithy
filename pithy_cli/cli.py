@@ -5,6 +5,7 @@ from .init import run_init
 from .ai_commit import run_ai_commit
 from .keys import set_key, get_key, list_keys, remove_key, unlock, lock, migrate_legacy_keys, list_providers
 from .summarize import run_summarize
+from .prompt import prompt_app
 
 app = typer.Typer()
 keys_app = typer.Typer()
@@ -12,6 +13,7 @@ ai_commit_app = typer.Typer()
 
 app.add_typer(keys_app, name="keys", help="Key management commands")
 app.add_typer(ai_commit_app, name="ai-commit", help="AI-powered commit messages")
+app.add_typer(prompt_app, name="prompt", help="Prompt template management")
 
 @app.command()
 def init() -> None:

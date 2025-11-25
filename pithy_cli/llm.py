@@ -2,10 +2,12 @@
 
 import json
 from enum import Enum
-from typing import Protocol
+from typing import Protocol, Optional
 from dataclasses import dataclass
+from pathlib import Path
 
-from .prompts import SUMMARY_PROMPT, TITLES_PROMPT, FILE_SUMMARY_PROMPT
+from .prompt import load_prompt
+from .init import find_git_root
 
 
 class LLMProvider(str, Enum):
@@ -92,21 +94,23 @@ def create_llm_client(
         raise ValueError(f"Unsupported provider: {provider}")
 
 
-# Prompts moved to prompts.py
-
-
 def generate_summary(
     client: LLMClient,
     diff: str,
     repo_name: str,
     branch: str,
+    git_root: Optional[Path] = None,
 ) -> list[str]:
     """
     Generate summary from git diff.
 
     Pure function - delegates I/O to client.
     """
-    prompt = SUMMARY_PROMPT.format(
+    if git_root is None:
+        git_root = find_git_root()
+
+    prompt_template = load_prompt("commit-summary", git_root)
+    prompt = prompt_template.format(
         repo_name=repo_name,
         branch=branch,
         diff=diff[:120000],  # Truncate to stay within limits
@@ -133,15 +137,20 @@ def generate_titles(
     client: LLMClient,
     summary: list[str],
     count: int = 3,
+    git_root: Optional[Path] = None,
 ) -> list[str]:
     """
     Generate commit titles from summary.
 
     Pure function - delegates I/O to client.
     """
+    if git_root is None:
+        git_root = find_git_root()
+
     summary_text = "\n".join(f"- {s}" for s in summary)
 
-    prompt = TITLES_PROMPT.format(
+    prompt_template = load_prompt("commit-titles", git_root)
+    prompt = prompt_template.format(
         summary_text=summary_text,
         count=count,
     )
@@ -173,13 +182,18 @@ def summarize_source_file(
     rel_path: str,
     language: str,
     content: str,
+    git_root: Optional[Path] = None,
 ) -> str:
     """
     Generate markdown summary of a source file via LLM.
 
     Pure function - delegates I/O to client.
     """
-    prompt = FILE_SUMMARY_PROMPT.format(
+    if git_root is None:
+        git_root = find_git_root()
+
+    prompt_template = load_prompt("file-summary", git_root)
+    prompt = prompt_template.format(
         rel_path=rel_path,
         language=language,
         content=content[:120000],  # Truncate to stay within limits

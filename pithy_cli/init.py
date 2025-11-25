@@ -117,9 +117,13 @@ def run_init() -> None:
     This function:
     1. Finds the git repository root
     2. Creates .pithy directory
-    3. Updates .gitignore with required entries
-    4. Reports actions taken to user
+    3. Copies default prompts to .pithy/prompts/
+    4. Updates .gitignore with required entries
+    5. Reports actions taken to user
     """
+    # Import here to avoid circular dependency
+    from .prompt import copy_default_prompts, get_prompts_dir
+
     # Find git repository root
     git_root = find_git_root()
 
@@ -134,6 +138,14 @@ def run_init() -> None:
     pithy_dir = ensure_pithy_directory(git_root)
     if pithy_dir.exists():
         typer.echo(f"📁 Ensured .pithy directory exists at: {pithy_dir}")
+
+    # Copy default prompts
+    prompts_dir = get_prompts_dir(git_root)
+    copied = copy_default_prompts(prompts_dir)
+    if copied:
+        typer.echo(f"📝 Copied default prompts: {', '.join(copied)}")
+    else:
+        typer.echo("✅ Prompts directory ready (defaults already present)")
 
     # Update .gitignore
     required_entries = [
