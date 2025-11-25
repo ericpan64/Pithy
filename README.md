@@ -6,6 +6,32 @@ Your pithy python pair programmer
 - Python version >=3.12
 - pipx
 
+## Development Setup
+
+```bash
+# Install dev dependencies
+uv sync --extra dev
+
+# Install pre-commit hooks
+uv run pre-commit install
+
+# Run hooks manually on all files (optional)
+uv run pre-commit run --all-files
+```
+
+### Pre-commit Hooks
+
+This project uses pre-commit hooks for code quality:
+
+- **File linting**: trailing whitespace, end-of-file fixes, YAML/TOML validation
+- **Ruff**: Python linting and formatting
+- **Mypy**: Static type checking
+
+Hooks run automatically on `git commit`. To skip hooks temporarily:
+```bash
+git commit --no-verify -m "your message"
+```
+
 ## Build steps
 - `uv build`
 - `pipx install .`
