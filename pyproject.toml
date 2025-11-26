@@ -27,6 +27,9 @@ dev = [
 requires = ["uv", "setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.package-data]
+pithy_cli = ["default_prompts/*.md"]
+
 [project.scripts]
 pithy = "pithy_cli.cli:app"
 
