@@ -1,36 +1,37 @@
 """AI-powered git commit message generation."""
 
 import sys
-from typing import Literal, Optional
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import typer
 from rich.console import Console
-from rich.prompt import Prompt
 from rich.panel import Panel
+from rich.prompt import Prompt
 
 from .git import (
-    has_staged_changes,
-    get_staged_diff,
-    get_repo_name,
-    get_branch_name,
-    read_commit_msg,
-    write_commit_msg,
-    install_git_hook,
-    uninstall_git_hook,
     format_commit_message,
+    get_branch_name,
+    get_repo_name,
+    get_staged_diff,
+    has_staged_changes,
+    install_git_hook,
+    read_commit_msg,
+    uninstall_git_hook,
+    write_commit_msg,
 )
+from .keys import Provider, get_provider_key
 from .llm import (
+    LLMProvider,
+    ModelType,
     create_llm_client,
     generate_summary,
     generate_titles,
-    LLMProvider,
-    ModelType,
 )
-from .keys import get_provider_key, Provider
 
 console = Console()
+error_console = Console(file=sys.stderr)
 
 AiCommitAction = Literal["install", "uninstall", "hook", "generate"]
 
@@ -38,6 +39,7 @@ AiCommitAction = Literal["install", "uninstall", "hook", "generate"]
 @dataclass
 class CommitMessage:
     """Generated commit message."""
+
     summary: list[str]
     titles: list[str]
 
@@ -62,12 +64,14 @@ def get_provider_config() -> tuple[LLMProvider, str]:
 
     # Check environment as fallback
     import os
+
     if key := os.environ.get("ANTHROPIC_API_KEY"):
         return LLMProvider.ANTHROPIC, key
     if key := os.environ.get("OPENAI_API_KEY"):
         return LLMProvider.OPENAI, key
 
     from .keys import PROVIDER_KEYS
+
     raise ValueError(
         "No API key found. Set one with:\n"
         f"  pithy keys set {PROVIDER_KEYS[Provider.ANTHROPIC]}\n"
@@ -118,7 +122,7 @@ def generate_commit_message(
     return CommitMessage(summary=summary, titles=titles)
 
 
-def interactive_selection(message: CommitMessage, existing: str = "") -> Optional[str]:
+def interactive_selection(message: CommitMessage, existing: str = "") -> str | None:
     """
     Interactive commit message selection with rich UI.
 
@@ -126,10 +130,11 @@ def interactive_selection(message: CommitMessage, existing: str = "") -> Optiona
         Selected commit title, or None if cancelled
     """
     console.print()
-    console.print(Panel.fit(
-        "🤖 [bold cyan]AI Commit Message Generator[/bold cyan]",
-        border_style="cyan"
-    ))
+    console.print(
+        Panel.fit(
+            "🤖 [bold cyan]AI Commit Message Generator[/bold cyan]", border_style="cyan"
+        )
+    )
 
     # Show existing message if present
     if existing.strip():
@@ -164,7 +169,7 @@ def interactive_selection(message: CommitMessage, existing: str = "") -> Optiona
             return None
 
         if choice == "e":
-            custom = Prompt.ask("   Enter custom commit message")
+            custom: str = Prompt.ask("   Enter custom commit message")
             if custom.strip():
                 return custom.strip()
             continue
@@ -196,7 +201,7 @@ def write_non_interactive_message(file_path: str, message: CommitMessage):
 
 def run_hook(
     file: str,
-    source: Optional[str] = None,
+    source: str | None = None,
     titles: int = 3,
     non_interactive: bool = False,
 ) -> None:
@@ -230,7 +235,7 @@ def run_hook(
                 console.print("[green]✅ Commit message saved![/green]")
 
     except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]", file=sys.stderr)
+        error_console.print(f"[red]❌ Error: {e}[/red]")
         # Don't fail the git commit - just show error
         return
 
@@ -263,14 +268,16 @@ def run_generate(
             # Write to git commit message file
             commit_msg_file = Path(".git/COMMIT_EDITMSG")
             if not commit_msg_file.exists():
-                console.print("[red]Not in a git repository[/red]", file=sys.stderr)
+                error_console.print("[red]Not in a git repository[/red]")
                 raise typer.Exit(1)
 
             selected = interactive_selection(message)
             if selected:
                 full_message = format_commit_message(selected, message.summary)
                 write_commit_msg(str(commit_msg_file), full_message)
-                console.print("[green]✅ Message written to .git/COMMIT_EDITMSG[/green]")
+                console.print(
+                    "[green]✅ Message written to .git/COMMIT_EDITMSG[/green]"
+                )
             return
 
         # Interactive mode - just show options
@@ -281,8 +288,8 @@ def run_generate(
             console.print(Panel(full_message, border_style="green"))
 
     except Exception as e:
-        console.print(f"[red]❌ Error: {e}[/red]", file=sys.stderr)
-        raise typer.Exit(1)
+        error_console.print(f"[red]❌ Error: {e}[/red]")
+        raise typer.Exit(1) from e
 
 
 def run_ai_commit(action: AiCommitAction, **kwargs) -> None:
@@ -321,5 +328,5 @@ def run_ai_commit(action: AiCommitAction, **kwargs) -> None:
         run_generate(titles, apply, json_output)
 
     else:
-        console.print(f"[red]Unknown action: {action}[/red]", file=sys.stderr)
+        error_console.print(f"[red]Unknown action: {action}[/red]")
         raise typer.Exit(1)
