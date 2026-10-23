@@ -4,22 +4,19 @@ Unit tests for pithy_cli.init module.
 Run with: pytest tests/test_init.py -v
 """
 
-import pytest
 from pathlib import Path
+
+import pytest
 from typer.testing import CliRunner
-from pithy_cli.init import (
-    find_git_root,
-    ensure_pithy_directory,
-    read_gitignore,
-    update_gitignore,
-    run_init
-)
+
 from pithy_cli.cli import app
+from pithy_cli.init import find_git_root, read_gitignore, run_init, update_gitignore
 
 runner = CliRunner()
 
 
 # Fixtures
+
 
 @pytest.fixture
 def temp_git_repo(tmp_path: Path) -> Path:
@@ -48,13 +45,16 @@ def git_repo_with_gitignore(temp_git_repo: Path) -> Path:
 
 # Tests for find_git_root
 
+
 def test_find_git_root_in_root_directory(temp_git_repo: Path):
     """Should find .git when called from repository root."""
     result = find_git_root(temp_git_repo)
     assert result == temp_git_repo
 
 
-def test_find_git_root_from_nested_directory(nested_git_repo: Path, temp_git_repo: Path):
+def test_find_git_root_from_nested_directory(
+    nested_git_repo: Path, temp_git_repo: Path
+):
     """Should traverse up to find .git from nested directories."""
     result = find_git_root(nested_git_repo)
     assert result == temp_git_repo
@@ -75,29 +75,8 @@ def test_find_git_root_stops_at_filesystem_root(tmp_path: Path):
     assert result is None or isinstance(result, Path)
 
 
-# Tests for ensure_pithy_directory
-
-def test_ensure_pithy_directory_creates_new_directory(temp_git_repo: Path):
-    """Should create .pithy directory if it doesn't exist."""
-    pithy_dir = ensure_pithy_directory(temp_git_repo)
-
-    assert pithy_dir.exists()
-    assert pithy_dir.is_dir()
-    assert pithy_dir.name == ".pithy"
-    assert pithy_dir.parent == temp_git_repo
-
-
-def test_ensure_pithy_directory_is_idempotent(temp_git_repo: Path):
-    """Should not fail when .pithy directory already exists."""
-    # Create it twice
-    first_call = ensure_pithy_directory(temp_git_repo)
-    second_call = ensure_pithy_directory(temp_git_repo)
-
-    assert first_call == second_call
-    assert first_call.exists()
-
-
 # Tests for read_gitignore
+
 
 def test_read_gitignore_returns_empty_list_when_file_missing(temp_git_repo: Path):
     """Should return empty list when .gitignore doesn't exist."""
@@ -125,6 +104,7 @@ def test_read_gitignore_preserves_empty_lines(temp_git_repo: Path):
 
 
 # Tests for update_gitignore
+
 
 def test_update_gitignore_creates_file_if_missing(temp_git_repo: Path):
     """Should create .gitignore if it doesn't exist."""
@@ -222,16 +202,15 @@ def test_update_gitignore_preserves_file_structure(git_repo_with_gitignore: Path
 
 # Integration Tests for run_init
 
+
 def test_run_init_full_workflow_new_repo(temp_git_repo: Path, monkeypatch):
     """Should complete full initialization workflow in a fresh repo."""
     monkeypatch.chdir(temp_git_repo)
 
     run_init()
 
-    # Verify .pithy directory created
-    pithy_dir = temp_git_repo / ".pithy"
-    assert pithy_dir.exists()
-    assert pithy_dir.is_dir()
+    # Verify pre-commit config created
+    assert (temp_git_repo / ".pre-commit-config.yaml").exists()
 
     # Verify .gitignore updated
     gitignore = temp_git_repo / ".gitignore"
@@ -239,22 +218,21 @@ def test_run_init_full_workflow_new_repo(temp_git_repo: Path, monkeypatch):
 
     content = gitignore.read_text()
     assert ".pithy/" in content
-    assert ".specstory/" in content
-    assert ".cursor*" in content
+    assert ".DS_Store" in content
+    assert ".claude" not in content  # teams commit .claude/ and .agents/
 
 
-def test_run_init_from_nested_directory(nested_git_repo: Path, temp_git_repo: Path, monkeypatch):
+def test_run_init_from_nested_directory(
+    nested_git_repo: Path, temp_git_repo: Path, monkeypatch
+):
     """Should work correctly when run from a nested subdirectory."""
     monkeypatch.chdir(nested_git_repo)
 
     run_init()
 
-    # Should create .pithy at root, not in nested directory
-    pithy_dir = temp_git_repo / ".pithy"
-    assert pithy_dir.exists()
-
-    nested_pithy = nested_git_repo / ".pithy"
-    assert not nested_pithy.exists()
+    # Should write files at root, not in nested directory
+    assert (temp_git_repo / ".gitignore").exists()
+    assert not (nested_git_repo / ".gitignore").exists()
 
 
 def test_run_init_is_idempotent(temp_git_repo: Path, monkeypatch):
@@ -266,19 +244,16 @@ def test_run_init_is_idempotent(temp_git_repo: Path, monkeypatch):
     run_init()
     run_init()
 
-    # Verify structure is correct
-    assert (temp_git_repo / ".pithy").exists()
-
     gitignore_content = (temp_git_repo / ".gitignore").read_text()
     # Each entry should appear exactly once
     assert gitignore_content.count(".pithy/") == 1
-    assert gitignore_content.count(".specstory/") == 1
-    assert gitignore_content.count(".cursor*") == 1
+    assert gitignore_content.count(".DS_Store") == 1
 
 
 def test_run_init_exits_when_not_in_git_repo(tmp_path: Path, monkeypatch):
     """Should exit with error when not in a git repository."""
     import typer
+
     non_git_dir = tmp_path / "not_a_repo"
     non_git_dir.mkdir()
     monkeypatch.chdir(non_git_dir)
@@ -289,11 +264,11 @@ def test_run_init_exits_when_not_in_git_repo(tmp_path: Path, monkeypatch):
     assert exc_info.value.exit_code == 1
 
 
-def test_run_init_preserves_existing_gitignore(git_repo_with_gitignore: Path, monkeypatch):
+def test_run_init_preserves_existing_gitignore(
+    git_repo_with_gitignore: Path, monkeypatch
+):
     """Should preserve existing .gitignore entries."""
     monkeypatch.chdir(git_repo_with_gitignore)
-
-    original_content = (git_repo_with_gitignore / ".gitignore").read_text()
 
     run_init()
 
@@ -309,6 +284,7 @@ def test_run_init_preserves_existing_gitignore(git_repo_with_gitignore: Path, mo
 
 # CLI Integration Tests
 
+
 def test_cli_init_command_success(temp_git_repo: Path, monkeypatch):
     """Should successfully run init command via CLI."""
     monkeypatch.chdir(temp_git_repo)
@@ -317,7 +293,7 @@ def test_cli_init_command_success(temp_git_repo: Path, monkeypatch):
 
     assert result.exit_code == 0
     assert "Found git repository" in result.stdout or "📍" in result.stdout
-    assert ".pithy" in result.stdout
+    assert ".gitignore" in result.stdout
     assert "complete" in result.stdout.lower() or "✨" in result.stdout
 
 
@@ -343,10 +319,13 @@ def test_cli_init_shows_progress_messages(temp_git_repo: Path, monkeypatch):
 
     # Should show what actions were taken
     output = result.stdout.lower()
-    assert any(keyword in output for keyword in ["created", "found", "updated", "complete"])
+    assert any(
+        keyword in output for keyword in ["created", "found", "updated", "complete"]
+    )
 
 
 # Edge Cases
+
 
 def test_gitignore_with_no_trailing_newline(temp_git_repo: Path):
     """Should handle .gitignore without trailing newline."""

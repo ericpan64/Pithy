@@ -5,11 +5,13 @@ description = "Your pithy python pair programmer CLI tool"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "anthropic>=0.69.0",
+    "anthropic>=2.2.0",
     "argon2-cffi>=25.1.0",
     "cryptography>=46.0.2",
     "gitpython>=3.1.45",
-    "openai>=2.1.0",
+    "keyring>=25.7.0",
+    "openai>=3.37.0",
+    "pyyaml>=6.0.3",
     "rich>=14.1.0",
     "typer>=0.19.2",
 ]
@@ -21,6 +23,7 @@ dev = [
     "pre-commit>=4.0.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
+    "types-PyYAML>=6.0.0",
 ]
 
 [build-system]
@@ -28,7 +31,7 @@ requires = ["uv", "setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
-pithy_cli = ["default_prompts/*.md"]
+pithy_cli = ["builtin_skills/*/SKILL.md"]
 
 [project.scripts]
 pithy = "pithy_cli.cli:app"
@@ -50,6 +53,9 @@ select = [
 ignore = [
     "E501",   # line too long (handled by formatter)
 ]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
 [tool.mypy]
 python_version = "3.12"

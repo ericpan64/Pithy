@@ -38,157 +38,81 @@ git commit --no-verify -m "your message"
 
 ## Features
 
-### Code Summarization
+### API keys
 
-Generate structured markdown summaries of your source code files and directories using AI.
-
-#### Quick Start
-
-```bash
-# Summarize a single file
-pithy summarize path/to/file.py
-
-# Summarize an entire directory
-pithy summarize src/
-
-# Summarize current directory
-pithy summarize .
-```
-
-#### Output Structure
-
-Summaries are written to timestamped subdirectories under `.pithy/summarize/` at your git repository root. Each run creates a new timestamp directory in the format `YYYY-MM-DD_HH-MM-SS`:
-
-```
-.pithy/
-└── summarize/
-    ├── 2025-01-15_14-30-22/
-    │   ├── src/
-    │   │   ├── app.py.md
-    │   │   ├── utils.py.md
-    │   │   └── _meta.md
-    │   └── README.md.md
-    └── 2025-01-15_15-45-10/
-        └── ...
-```
-
-- **File summaries**: `.pithy/summarize/<timestamp>/<relative_path>.<ext>.md`
-  - Example: `src/app.py` → `.pithy/summarize/2025-01-15_14-30-22/src/app.py.md`
-  - Contains AI-generated summary with key points, purpose, dependencies, and notes
-
-- **Directory meta**: `.pithy/summarize/<timestamp>/<relative_path>/_meta.md`
-  - Aggregates immediate files with one-line synopses
-  - References subdirectories via links to their `_meta.md` files
-  - Generated programmatically (no LLM calls)
-
-**Benefits of timestamped directories:**
-- Track evolution of your codebase over time
-- Compare summaries from different points in development
-- Never overwrite previous summaries
-- Easy to identify when summaries were generated
-
-#### Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `path` | `.` | File or directory to summarize |
-| `--exclude`, `-x` | *(none)* | Glob patterns to exclude (repeatable) |
-| `--depth` | `-1` | Maximum recursion depth (-1 = unlimited) |
-| `--force` | `False` | Regenerate even if outputs are up-to-date |
-| `--dry-run` | `False` | Show planned actions without writing files |
-| `--max-file-bytes` | `120000` | Read limit per file (caps token usage) |
-| `--quiet` | `False` | Reduce console output |
-| `--include-ignored` | `False` | Process gitignored files |
-
-#### Default Exclusions
-
-**Gitignored files** are automatically excluded by default. The summarize command respects your `.gitignore` file(s) and skips any files or directories that git would ignore. Use `--include-ignored` to override this behavior.
-
-Additionally, the following patterns are always excluded:
-- `.git/`, `.pithy/`
-- `node_modules/`, `dist/`, `build/`, `.venv/`
-- `*.lock`, `*.min.*`
-
-#### Examples
-
-**Exclude specific files or patterns:**
-```bash
-pithy summarize . --exclude "tests/*" --exclude "*.tmp"
-```
-
-**Limit recursion depth:**
-```bash
-pithy summarize src/ --depth 2
-```
-
-**Force regeneration of all summaries:**
-```bash
-pithy summarize . --force
-```
-
-**Preview actions without writing:**
-```bash
-pithy summarize src/ --dry-run
-```
-
-**Quiet mode for scripting:**
-```bash
-pithy summarize . --quiet
-```
-
-**Include gitignored files:**
-```bash
-pithy summarize . --include-ignored
-# Processes everything, including files matched by .gitignore
-```
-
-#### Gitignore Integration
-
-By default, `pithy summarize` respects your `.gitignore` files:
-- Files and directories matched by `.gitignore` patterns are automatically skipped
-- Nested `.gitignore` files are respected (follows git's hierarchy)
-- Works seamlessly with your existing git workflow
-- Use `--include-ignored` to process ignored files when needed (e.g., for documentation of build artifacts)
-
-**Example:**
-```bash
-# .gitignore contains:
-# build/
-# *.pyc
-# .env
-
-# Default behavior - skips build/, *.pyc, .env
-pithy summarize .
-
-# Process everything, including gitignored files
-pithy summarize . --include-ignored
-```
-
-#### Incremental Updates
-
-By default, summaries are only regenerated when the source file is newer than the existing summary. This saves API calls and time on repeated runs. Use `--force` to override this behavior.
-
-#### Cost Control
-
-- Only file-level summaries invoke the LLM
-- Directory `_meta.md` files are generated programmatically (deterministic, free)
-- `--max-file-bytes` caps the amount of content sent per file (default: 120KB)
-- Binary files are detected and skipped automatically
-
-#### API Key Setup
-
-Before using summarization, configure your LLM provider API key:
+Pithy supports Anthropic, OpenAI, and Together AI. Keys are read from the
+provider's environment variable first (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
+`TOGETHER_API_KEY`), then from the OS keychain (macOS Keychain, Windows
+Credential Manager, or Secret Service on Linux).
 
 ```bash
-# For Anthropic Claude
-pithy keys set Anthropic
+pithy keys set anthropic      # or: openai, together
+pithy keys list               # which providers have keys, and where from
+pithy keys remove anthropic
+pithy keys import-legacy      # one-time import from the old ~/.pithy/keys file
+```
 
-# For OpenAI GPT
-pithy keys set OpenAI
+The first provider with a key is used, in the order anthropic, openai, together.
+Override with `PITHY_PROVIDER=together` and, optionally, `PITHY_MODEL=<model id>`.
 
-# For Together AI (open-weight models: Kimi K3, Qwen)
-pithy keys set Together
+### AI commit messages
 
-# Check provider status
-pithy keys providers
+One structured LLM call turns your staged diff into a bulleted summary and
+several conventional-commit title options, matching the style of your recent commits.
+
+```bash
+pithy ai-commit install            # prepare-commit-msg hook (works in subdirs and worktrees)
+pithy ai-commit install --force    # replace an existing non-Pithy hook
+pithy ai-commit generate           # pick a message interactively
+pithy ai-commit generate --json    # print summary and titles as JSON
+pithy ai-commit uninstall
+```
+
+Customize the instructions with `pithy skills edit commit-message`.
+
+### Codebase overview
+
+`pithy summarize` sends a path's files (tracked and untracked, minus anything
+gitignored) to the model in one call and returns a markdown overview: purpose,
+architecture, key flows, commands, dependencies, and gotchas.
+
+```bash
+pithy summarize                    # whole repo, printed to stdout
+pithy summarize src/ -o AGENTS.md  # write to a file
+pithy summarize . -x "tests/*"     # exclude globs (repeatable)
+```
+
+Binary files and `*.lock`, `*.min.*`, `package-lock.json` are skipped. File contents
+are capped by `--max-chars` (default 400,000); files over the budget are still
+listed, and the overview notes they were omitted.
+
+### Skills
+
+Pithy's instructions are [Agent Skills](https://agentskills.io): a folder with a
+`SKILL.md` file of YAML frontmatter plus markdown. The skill body is the system
+prompt; input (a diff, files, or stdin) is the user message, so there is no
+template syntax to learn.
+
+```markdown
+---
+name: changelog
+description: Turns a list of commits into user-facing release notes.
+metadata:
+  pithy-model: fast   # optional: fast | regular (default)
+---
+
+Group changes into Added, Changed, and Fixed. Skip internal refactors.
+```
+
+Project skills live in `.agents/skills/<name>/SKILL.md`, so they are committed
+with the repo and other agent tools can use them too. A project skill with the same
+name as a built-in (`commit-message`, `repo-overview`) overrides it.
+
+```bash
+pithy skills list                              # built-in, project, and override skills
+pithy skills new changelog -d "Release notes"  # scaffold and open in $EDITOR
+pithy skills edit commit-message               # copies the built-in into .agents/skills/ first
+pithy skills reset commit-message              # delete the override, back to built-in
+git log --oneline -20 | pithy skills run changelog
+pithy skills run repo-overview src/app.py src/util.py
 ```

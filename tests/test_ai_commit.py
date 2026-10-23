@@ -4,29 +4,30 @@ Unit tests for pithy_cli.ai_commit module.
 Run with: pytest tests/test_ai_commit.py -v
 """
 
-import pytest
+import json
+import subprocess
 from pathlib import Path
 from unittest.mock import Mock, patch
+
+import pytest
 from typer.testing import CliRunner
 
+from pithy_cli.ai_commit import COMMIT_SCHEMA, generate_commit_message
+from pithy_cli.cli import app
 from pithy_cli.git import (
     format_commit_message,
+    get_recent_subjects,
     get_repo_name,
+    get_staged_diff,
+    git_path,
     has_staged_changes,
 )
-from pithy_cli.llm import (
-    LLMProvider,
-    create_llm_client,
-    AnthropicClient,
-    OpenAIClient,
-    TogetherClient,
-)
-from pithy_cli.cli import app
 
 runner = CliRunner()
 
 
 # Tests for git.py functions
+
 
 def test_format_commit_message_with_summary():
     """Test formatting commit message with summary."""
@@ -43,225 +44,177 @@ def test_format_commit_message_with_summary():
 
 def test_format_commit_message_without_summary():
     """Test formatting commit message without summary."""
-    title = "fix: resolve bug"
-    summary = []
-
-    result = format_commit_message(title, summary)
-
-    assert result == title
+    assert format_commit_message("fix: resolve bug", []) == "fix: resolve bug"
 
 
 def test_format_commit_message_preserves_existing_bullets():
     """Test that existing bullet points are preserved."""
-    title = "refactor: clean up code"
-    summary = ["- Already has bullet", "No bullet here"]
-
-    result = format_commit_message(title, summary)
+    result = format_commit_message(
+        "refactor: clean up code", ["- Already has bullet", "No bullet here"]
+    )
 
     assert "- Already has bullet" in result
+    assert "- - Already" not in result
     assert "- No bullet here" in result
 
 
-def test_get_repo_name():
-    """Test getting repository name."""
-    name = get_repo_name()
-    # Should not crash, returns string
-    assert isinstance(name, str)
-    assert len(name) > 0
-
-
-# Tests for llm.py
-
-def test_create_llm_client_anthropic():
-    """Test creating Anthropic LLM client."""
-    client = create_llm_client(LLMProvider.ANTHROPIC, "test-key")
-
-    assert isinstance(client, AnthropicClient)
-    assert client.api_key == "test-key"
-
-
-def test_create_llm_client_openai():
-    """Test creating OpenAI LLM client."""
-    client = create_llm_client(LLMProvider.OPENAI, "test-key")
-
-    assert isinstance(client, OpenAIClient)
-    assert client.api_key == "test-key"
-
-
-def test_create_llm_client_together():
-    """Test creating Together AI LLM client."""
-    client = create_llm_client(LLMProvider.TOGETHER, "test-key")
-
-    assert isinstance(client, TogetherClient)
-    assert client.api_key == "test-key"
-
-
-@patch("openai.OpenAI")
-def test_together_client_complete(mock_openai):
-    """Test Together client targets Together's endpoint with reasoning disabled."""
-    mock_response = Mock()
-    mock_response.choices = [Mock(message=Mock(content="hello"))]
-    mock_openai.return_value.chat.completions.create.return_value = mock_response
-
-    result = TogetherClient(api_key="test-key").complete("prompt", max_tokens=100)
-
-    assert result == "hello"
-    mock_openai.assert_called_once_with(
-        api_key="test-key", base_url="https://api.together.ai/v1"
-    )
-    kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
-    assert kwargs["model"] == "moonshotai/Kimi-K3"
-    assert kwargs["max_tokens"] == 100
-    assert kwargs["extra_body"] == {"reasoning": {"enabled": False}}
-
-
-def test_create_llm_client_invalid_provider():
-    """Test that invalid provider raises error."""
-    with pytest.raises(ValueError, match="Unsupported provider"):
-        create_llm_client("invalid", "test-key")
-
-
-# Mock LLM client for testing
-
-class MockLLMClient:
-    """Mock LLM client for testing."""
-
-    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
-        """Return mock JSON response."""
-        if "summary" in prompt.lower():
-            return '''{"summary": ["Add new feature", "Update tests", "Fix bug"]}'''
-        else:
-            return '''{
-                "titles": [
-                    "feat: add new feature",
-                    "test: update test suite",
-                    "fix: resolve critical bug"
-                ]
-            }'''
-
-
-# Integration tests
-
-@pytest.fixture
-def temp_git_repo(tmp_path: Path) -> Path:
-    """Create a temporary git repository."""
-    repo_root = tmp_path / "test_repo"
-    repo_root.mkdir()
-    (repo_root / ".git").mkdir()
-    (repo_root / ".git/hooks").mkdir(parents=True)
-    return repo_root
-
-
-def test_install_hook_creates_file(temp_git_repo: Path, monkeypatch):
-    """Test that install command creates hook file."""
-    monkeypatch.chdir(temp_git_repo)
-
-    result = runner.invoke(app, ["ai-commit", "install"])
-
-    assert result.exit_code == 0
-    hook_path = temp_git_repo / ".git/hooks/prepare-commit-msg"
-    assert hook_path.exists()
-    assert hook_path.stat().st_mode & 0o111  # Check executable
-
-
-def test_install_hook_with_custom_titles(temp_git_repo: Path, monkeypatch):
-    """Test installing hook with custom title count."""
-    monkeypatch.chdir(temp_git_repo)
-
-    result = runner.invoke(app, ["ai-commit", "install", "--titles", "5"])
-
-    assert result.exit_code == 0
-    hook_path = temp_git_repo / ".git/hooks/prepare-commit-msg"
-    content = hook_path.read_text()
-    assert "--titles 5" in content
-
-
-def test_uninstall_hook_removes_file(temp_git_repo: Path, monkeypatch):
-    """Test that uninstall removes hook file."""
-    monkeypatch.chdir(temp_git_repo)
-
-    # Install first
-    runner.invoke(app, ["ai-commit", "install"])
-
-    # Then uninstall
-    result = runner.invoke(app, ["ai-commit", "uninstall"])
-
-    assert result.exit_code == 0
-    hook_path = temp_git_repo / ".git/hooks/prepare-commit-msg"
-    assert not hook_path.exists()
-
-
-def test_uninstall_hook_when_not_installed(temp_git_repo: Path, monkeypatch):
-    """Test uninstalling when hook doesn't exist."""
-    monkeypatch.chdir(temp_git_repo)
-
-    result = runner.invoke(app, ["ai-commit", "uninstall"])
-
-    assert result.exit_code == 0
-    assert "not found" in result.stdout.lower()
-
-
-@patch('pithy_cli.ai_commit.get_provider_config')
-@patch('pithy_cli.ai_commit.has_staged_changes', return_value=True)
-@patch('pithy_cli.ai_commit.get_staged_diff', return_value="diff content")
-@patch('pithy_cli.ai_commit.get_repo_name', return_value="test-repo")
-@patch('pithy_cli.ai_commit.get_branch_name', return_value="main")
-def test_generate_json_output(
-    mock_branch,
-    mock_repo,
-    mock_diff,
-    mock_staged,
-    mock_config,
-    temp_git_repo,
-    monkeypatch
-):
-    """Test generate command with JSON output."""
-    monkeypatch.chdir(temp_git_repo)
-
-    # Mock provider config
-    mock_config.return_value = (LLMProvider.ANTHROPIC, "test-key")
-
-    # Mock LLM client
-    with patch('pithy_cli.ai_commit.create_llm_client', return_value=MockLLMClient()):
-        result = runner.invoke(app, ["ai-commit", "generate", "--json"])
-
-        assert result.exit_code == 0
-        # Should output JSON
-        assert "{" in result.stdout
-        assert "summary" in result.stdout or "titles" in result.stdout
-
-
-# Edge cases
-
 def test_format_commit_message_with_unicode():
     """Test formatting with unicode characters."""
-    title = "feat: add emoji support 🎉"
-    summary = ["Support emoji in messages 🚀"]
-
-    result = format_commit_message(title, summary)
+    result = format_commit_message(
+        "feat: add emoji support 🎉", ["Support emoji in messages 🚀"]
+    )
 
     assert "🎉" in result
     assert "🚀" in result
 
 
-def test_format_commit_message_with_long_summary():
-    """Test formatting with many summary points."""
-    title = "refactor: major cleanup"
-    summary = [f"Change {i}" for i in range(10)]
-
-    result = format_commit_message(title, summary)
-
-    lines = result.split("\n")
-    # Title + blank line + 10 summary points
-    assert len(lines) >= 12
+def test_get_repo_name(git_repo):
+    assert get_repo_name() == "repo"
 
 
-def test_install_creates_executable_hook(temp_git_repo: Path, monkeypatch):
-    """Test that installed hook is executable."""
-    monkeypatch.chdir(temp_git_repo)
+def test_has_staged_changes(git_repo):
+    assert not has_staged_changes()
+
+    (git_repo / "new.txt").write_text("x")
+    subprocess.run(["git", "add", "new.txt"], check=True)
+
+    assert has_staged_changes()
+
+
+def test_get_staged_diff_truncates_and_appends_stat(git_repo):
+    (git_repo / "big.txt").write_text("line\n" * 1000)
+    subprocess.run(["git", "add", "big.txt"], check=True)
+
+    diff = get_staged_diff(max_chars=200)
+
+    assert "[Diff truncated at 200 characters. Full stat:]" in diff
+    assert "big.txt" in diff.split("Full stat:]")[1]
+
+
+def test_get_recent_subjects(git_repo):
+    assert get_recent_subjects() == ["chore: initial commit"]
+
+
+def test_git_path_from_subdirectory(git_repo, monkeypatch):
+    (git_repo / "sub").mkdir()
+    monkeypatch.chdir(git_repo / "sub")
+
+    assert git_path("COMMIT_EDITMSG") == git_repo / ".git" / "COMMIT_EDITMSG"
+
+
+# generate_commit_message
+
+
+@patch("pithy_cli.ai_commit.resolve_client")
+def test_generate_commit_message_single_structured_call(mock_resolve, git_repo):
+    (git_repo / "feature.py").write_text("def feature(): pass\n")
+    subprocess.run(["git", "add", "feature.py"], check=True)
+    client = Mock()
+    client.complete.return_value = json.dumps(
+        {"summary": ["Add feature"], "titles": ["feat: a", "feat: b", "feat: c", "x"]}
+    )
+    mock_resolve.return_value = client
+
+    message = generate_commit_message(titles_count=3)
+
+    assert message.summary == ["Add feature"]
+    assert message.titles == ["feat: a", "feat: b", "feat: c"]
+    client.complete.assert_called_once()
+    system, user = client.complete.call_args.args
+    assert "commit" in system.lower()
+    assert "Number of titles: 3" in user
+    assert "- chore: initial commit" in user  # recent subjects for style
+    assert "feature.py" in user
+    assert client.complete.call_args.kwargs["schema"] == COMMIT_SCHEMA
+
+
+def test_generate_commit_message_requires_staged_changes(git_repo):
+    with pytest.raises(ValueError, match="No staged changes"):
+        generate_commit_message()
+
+
+@patch("pithy_cli.ai_commit.generate_commit_message")
+def test_generate_json_output(mock_generate, git_repo):
+    from pithy_cli.ai_commit import CommitMessage
+
+    mock_generate.return_value = CommitMessage(["Add X"], ["feat: add x"])
+
+    result = runner.invoke(app, ["ai-commit", "generate", "--json"])
+
+    assert result.exit_code == 0
+    assert '"titles"' in result.stdout
+
+
+# Hook install/uninstall
+
+
+def _hook(repo: Path) -> Path:
+    return repo / ".git/hooks/prepare-commit-msg"
+
+
+def test_install_hook_creates_executable_file(git_repo):
+    result = runner.invoke(app, ["ai-commit", "install", "--titles", "5"])
+
+    assert result.exit_code == 0
+    assert _hook(git_repo).stat().st_mode & 0o100
+    assert "--titles 5" in _hook(git_repo).read_text()
+
+
+def test_install_hook_from_subdirectory(git_repo, monkeypatch):
+    (git_repo / "sub").mkdir()
+    monkeypatch.chdir(git_repo / "sub")
 
     result = runner.invoke(app, ["ai-commit", "install"])
 
     assert result.exit_code == 0
-    hook_path = temp_git_repo / ".git/hooks/prepare-commit-msg"
-    assert hook_path.stat().st_mode & 0o100  # Owner execute bit
+    assert _hook(git_repo).exists()
+    assert not (git_repo / "sub/.git").exists()
+
+
+def test_install_hook_in_worktree(git_repo, tmp_path, monkeypatch):
+    worktree = tmp_path / "wt"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", str(worktree)], check=True, capture_output=True
+    )
+    monkeypatch.chdir(worktree)
+
+    result = runner.invoke(app, ["ai-commit", "install"])
+
+    assert result.exit_code == 0, result.output
+    assert _hook(git_repo).exists()  # worktrees share the main repo's hooks
+
+
+def test_install_refuses_foreign_hook(git_repo):
+    _hook(git_repo).parent.mkdir(parents=True, exist_ok=True)
+    _hook(git_repo).write_text("#!/bin/sh\necho mine\n")
+
+    result = runner.invoke(app, ["ai-commit", "install"])
+
+    assert result.exit_code == 1
+    assert "--force" in result.output
+    assert "echo mine" in _hook(git_repo).read_text()
+
+    result = runner.invoke(app, ["ai-commit", "install", "--force"])
+
+    assert result.exit_code == 0
+    assert "Pithy AI Commit Hook" in _hook(git_repo).read_text()
+
+
+def test_uninstall_hook_removes_file(git_repo):
+    runner.invoke(app, ["ai-commit", "install"])
+
+    result = runner.invoke(app, ["ai-commit", "uninstall"])
+
+    assert result.exit_code == 0
+    assert not _hook(git_repo).exists()
+
+
+def test_uninstall_leaves_foreign_hook(git_repo):
+    _hook(git_repo).parent.mkdir(parents=True, exist_ok=True)
+    _hook(git_repo).write_text("#!/bin/sh\necho mine\n")
+
+    result = runner.invoke(app, ["ai-commit", "uninstall"])
+
+    assert result.exit_code == 0
+    assert "not found" in result.stdout.lower()
+    assert _hook(git_repo).exists()

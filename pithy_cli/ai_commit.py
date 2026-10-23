@@ -2,8 +2,6 @@
 
 import sys
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
 
 import typer
 from rich.console import Console
@@ -13,27 +11,30 @@ from rich.prompt import Prompt
 from .git import (
     format_commit_message,
     get_branch_name,
+    get_recent_subjects,
+    get_repo,
     get_repo_name,
     get_staged_diff,
+    git_path,
     has_staged_changes,
-    install_git_hook,
     read_commit_msg,
-    uninstall_git_hook,
     write_commit_msg,
 )
-from .keys import Provider, get_provider_key
-from .llm import (
-    LLMProvider,
-    ModelType,
-    create_llm_client,
-    generate_summary,
-    generate_titles,
-)
+from .llm import complete_json, resolve_client
+from .skills import load_skill
 
 console = Console()
 error_console = Console(file=sys.stderr)
 
-AiCommitAction = Literal["install", "uninstall", "hook", "generate"]
+COMMIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "array", "items": {"type": "string"}},
+        "titles": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["summary", "titles"],
+    "additionalProperties": False,
+}
 
 
 @dataclass
@@ -44,87 +45,36 @@ class CommitMessage:
     titles: list[str]
 
 
-def get_provider_config() -> tuple[LLMProvider, str]:
-    """
-    Get LLM provider and API key from keystore or environment.
-
-    Returns:
-        Tuple of (provider, api_key)
-    """
-    # Map Provider enum to LLMProvider enum
-    provider_map = {
-        Provider.ANTHROPIC: LLMProvider.ANTHROPIC,
-        Provider.OPENAI: LLMProvider.OPENAI,
-        Provider.TOGETHER: LLMProvider.TOGETHER,
-    }
-
-    # Try each provider in order
-    for provider, llm_provider in provider_map.items():
-        if key := get_provider_key(provider):
-            return llm_provider, key
-
-    # Check environment as fallback
-    import os
-
-    if key := os.environ.get("ANTHROPIC_API_KEY"):
-        return LLMProvider.ANTHROPIC, key
-    if key := os.environ.get("OPENAI_API_KEY"):
-        return LLMProvider.OPENAI, key
-    if key := os.environ.get("TOGETHER_API_KEY"):
-        return LLMProvider.TOGETHER, key
-
-    from .keys import PROVIDER_KEYS
-
-    raise ValueError(
-        "No API key found. Set one with:\n"
-        f"  pithy keys set {PROVIDER_KEYS[Provider.ANTHROPIC]}\n"
-        "  or\n"
-        f"  pithy keys set {PROVIDER_KEYS[Provider.OPENAI]}\n"
-        "  or\n"
-        f"  pithy keys set {PROVIDER_KEYS[Provider.TOGETHER]}"
+def build_commit_input(titles_count: int) -> str:
+    """Build the user message: repo context, recent subjects, and staged diff."""
+    subjects = "\n".join(f"- {s}" for s in get_recent_subjects()) or "(none)"
+    return (
+        f"Repository: {get_repo_name()}\n"
+        f"Branch: {get_branch_name()}\n"
+        f"Number of titles: {titles_count}\n\n"
+        f"Recent commit subjects:\n{subjects}\n\n"
+        f"Staged changes (git diff):\n```\n{get_staged_diff()}\n```"
     )
 
 
-def generate_commit_message(
-    titles_count: int = 3,
-    max_diff_bytes: int = 120_000,
-) -> CommitMessage:
-    """
-    Generate commit message from staged changes.
-
-    Pure business logic - delegates all effects to helper functions.
-    """
-    # Validate preconditions
+def generate_commit_message(titles_count: int = 3) -> CommitMessage:
+    """Generate a summary and title options from staged changes in one call."""
     if not has_staged_changes():
         raise ValueError("No staged changes detected")
 
-    # Get git context
-    diff = get_staged_diff(max_diff_bytes)
-    repo_name = get_repo_name()
-    branch = get_branch_name()
+    skill = load_skill("commit-message")
+    client = resolve_client(skill.model_type)
 
-    # Get LLM configuration
-    provider, api_key = get_provider_config()
-    client = create_llm_client(provider, api_key, model_type=ModelType.REGULAR)
-
-    # Phase 1: Generate summary from diff
-    with console.status("[bold green]Analyzing changes...", spinner="dots"):
-        summary = generate_summary(
-            client=client,
-            diff=diff,
-            repo_name=repo_name,
-            branch=branch,
+    with console.status("[bold green]Generating commit message...", spinner="dots"):
+        data = complete_json(
+            client,
+            skill.body,
+            build_commit_input(titles_count),
+            COMMIT_SCHEMA,
+            max_tokens=2000,
         )
 
-    # Phase 2: Generate commit titles from summary
-    with console.status("[bold green]Generating commit messages...", spinner="dots"):
-        titles = generate_titles(
-            client=client,
-            summary=summary,
-            count=titles_count,
-        )
-
-    return CommitMessage(summary=summary, titles=titles)
+    return CommitMessage(summary=data["summary"], titles=data["titles"][:titles_count])
 
 
 def interactive_selection(message: CommitMessage, existing: str = "") -> str | None:
@@ -270,16 +220,15 @@ def run_generate(
             return
 
         if apply:
-            # Write to git commit message file
-            commit_msg_file = Path(".git/COMMIT_EDITMSG")
-            if not commit_msg_file.exists():
+            if get_repo() is None:
                 error_console.print("[red]Not in a git repository[/red]")
                 raise typer.Exit(1)
+            commit_msg_file = git_path("COMMIT_EDITMSG")
 
             selected = interactive_selection(message)
             if selected:
                 full_message = format_commit_message(selected, message.summary)
-                write_commit_msg(str(commit_msg_file), full_message)
+                write_commit_msg(commit_msg_file, full_message)
                 console.print(
                     "[green]✅ Message written to .git/COMMIT_EDITMSG[/green]"
                 )
@@ -292,46 +241,8 @@ def run_generate(
             console.print("\n[bold green]Selected message:[/bold green]")
             console.print(Panel(full_message, border_style="green"))
 
+    except typer.Exit:
+        raise
     except Exception as e:
         error_console.print(f"[red]❌ Error: {e}[/red]")
         raise typer.Exit(1) from e
-
-
-def run_ai_commit(action: AiCommitAction, **kwargs) -> None:
-    """
-    Main entry point for ai-commit command.
-
-    Routes to appropriate handler based on action.
-    """
-    if action == "install":
-        titles = kwargs.get("titles", 3)
-
-        hook_path = install_git_hook(titles=titles)
-        console.print(f"[green]✅ Git hook installed at:[/green] {hook_path}")
-
-    elif action == "uninstall":
-        hook_path = uninstall_git_hook()
-        if hook_path:
-            console.print(f"[green]✅ Git hook uninstalled:[/green] {hook_path}")
-        else:
-            console.print("[yellow]ℹ Hook not found[/yellow]")
-
-    elif action == "hook":
-        # Called by git hook
-        file = kwargs["file"]
-        source = kwargs.get("source")
-        titles = kwargs.get("titles", 3)
-        non_interactive = kwargs.get("non_interactive", False)
-
-        run_hook(file, source, titles, non_interactive)
-
-    elif action == "generate":
-        titles = kwargs.get("titles", 3)
-        apply = kwargs.get("apply", False)
-        json_output = kwargs.get("json", False)
-
-        run_generate(titles, apply, json_output)
-
-    else:
-        error_console.print(f"[red]Unknown action: {action}[/red]")
-        raise typer.Exit(1)

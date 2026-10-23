@@ -1,89 +1,99 @@
-import typer
-from typing import Optional, List
+import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
 
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from . import ai_commit, git, keys, skills
 from .init import run_init
-from .ai_commit import run_ai_commit
-from .keys import set_key, get_key, list_keys, remove_key, unlock, lock, migrate_legacy_keys, list_providers
 from .summarize import run_summarize
-from .prompt import prompt_app
 
 app = typer.Typer()
 keys_app = typer.Typer()
 ai_commit_app = typer.Typer()
+skills_app = typer.Typer()
 
-app.add_typer(keys_app, name="keys", help="Key management commands")
+app.add_typer(keys_app, name="keys", help="API key management")
 app.add_typer(ai_commit_app, name="ai-commit", help="AI-powered commit messages")
-app.add_typer(prompt_app, name="prompt", help="Prompt template management")
+app.add_typer(skills_app, name="skills", help="Agent Skills management")
+
+console = Console()
+
+
+def _run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run a command body, turning unexpected errors into 'Error: ...' + exit 1."""
+    try:
+        return fn(*args, **kwargs)
+    except (typer.Exit, typer.Abort):
+        raise
+    except Exception as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
+
 
 @app.command()
 def init() -> None:
-    typer.echo("Running `init`")
+    """Set up pre-commit config and .gitignore entries."""
     run_init()
 
 
 @app.command()
 def summarize(
     path: str = typer.Argument(".", help="File or directory to summarize"),
-    exclude: List[str] = typer.Option(None, "--exclude", "-x", help="Glob patterns to exclude"),
-    depth: int = typer.Option(-1, "--depth", help="Max recursion depth (-1 = unlimited)"),
-    force: bool = typer.Option(False, "--force", help="Regenerate even if up-to-date"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show actions without writing"),
-    max_file_bytes: int = typer.Option(120_000, "--max-file-bytes", help="Read limit per file"),
-    quiet: bool = typer.Option(False, "--quiet", help="Reduce output"),
-    include_ignored: bool = typer.Option(False, "--include-ignored", help="Process gitignored files"),
+    output: str | None = typer.Option(
+        None, "--output", "-o", help="Write to file (e.g. AGENTS.md)"
+    ),
+    exclude: list[str] = typer.Option(
+        None, "--exclude", "-x", help="Glob patterns to exclude"
+    ),
+    max_chars: int = typer.Option(
+        400_000, "--max-chars", help="Budget for file contents sent to the model"
+    ),
 ) -> None:
-    """Generate structured markdown summaries of files and directories."""
-    try:
-        run_summarize(
-            target=path,
-            excludes=exclude or [],
-            depth=depth,
-            force=force,
-            dry_run=dry_run,
-            max_file_bytes=max_file_bytes,
-            quiet=quiet,
-            include_ignored=include_ignored,
-        )
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+    """Generate a markdown overview of a codebase."""
+    _run(run_summarize, path, output, exclude or [], max_chars)
 
 
 # AI Commit commands
 
+
 @ai_commit_app.command()
 def install(
-    titles: int = typer.Option(3, "--titles", "-n", help="Number of title options to generate"),
+    titles: int = typer.Option(
+        3, "--titles", "-n", help="Number of title options to generate"
+    ),
+    force: bool = typer.Option(False, "--force", help="Replace an existing hook"),
 ) -> None:
     """Install git hook for AI commit messages."""
-    try:
-        run_ai_commit("install", titles=titles)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+    hook_path = _run(git.install_git_hook, titles=titles, force=force)
+    console.print(f"[green]✅ Git hook installed at:[/green] {hook_path}")
+
 
 @ai_commit_app.command()
 def uninstall() -> None:
     """Uninstall git hook."""
-    try:
-        run_ai_commit("uninstall")
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+    hook_path = _run(git.uninstall_git_hook)
+    if hook_path:
+        console.print(f"[green]✅ Git hook uninstalled:[/green] {hook_path}")
+    else:
+        console.print("[yellow]ℹ Pithy hook not found[/yellow]")
+
 
 @ai_commit_app.command()
 def hook(
     file: str = typer.Argument(..., help="Commit message file"),
-    source: Optional[str] = typer.Option(None, "--source", help="Commit source"),
+    source: str | None = typer.Option(None, "--source", help="Commit source"),
     titles: int = typer.Option(3, "--titles", help="Number of titles"),
-    non_interactive: bool = typer.Option(False, "--non-interactive", help="Non-interactive mode"),
+    non_interactive: bool = typer.Option(
+        False, "--non-interactive", help="Non-interactive mode"
+    ),
 ) -> None:
     """Hook handler (internal use by git)."""
-    try:
-        run_ai_commit("hook", file=file, source=source, titles=titles, non_interactive=non_interactive)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+    ai_commit.run_hook(file, source, titles, non_interactive)
+
 
 @ai_commit_app.command()
 def generate(
@@ -92,95 +102,122 @@ def generate(
     json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Generate commit message manually."""
-    try:
-        run_ai_commit("generate", titles=titles, apply=apply, json=json)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+    ai_commit.run_generate(titles, apply, json)
 
-@keys_app.command()
-def set(name: str, value: Optional[str] = None) -> None:
-    """Set a key."""
-    try:
-        set_key(name, value)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
 
-@keys_app.command()
-def get(name: str) -> None:
-    """Get a key."""
-    try:
-        value = get_key(name)
-        if value:
-            typer.echo(value)
-        else:
-            typer.echo(f"Key '{name}' not found", err=True)
-            raise typer.Exit(1)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+# Key commands
+
+
+@keys_app.command("set")
+def keys_set(
+    provider: str = typer.Argument(..., help="anthropic, openai, or together"),
+    value: str | None = typer.Option(None, help="Key value (prompts if omitted)"),
+) -> None:
+    """Store a provider API key in the OS keychain."""
+    _run(keys.set_key, provider, value)
+
+
+@keys_app.command("remove")
+def keys_remove(provider: str) -> None:
+    """Remove a provider API key from the OS keychain."""
+    _run(keys.remove_key, provider)
+
 
 @keys_app.command("list")
-def list_keys_cmd() -> None:
-    """List all keys."""
-    try:
-        list_keys()
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
+def keys_list() -> None:
+    """Show which providers have keys and where they come from."""
+    status = _run(keys.key_status)
+    console.print("\n[bold]Provider keys:[/bold]")
+    for provider, where in status.items():
+        mark = "[green]✓[/green]" if where else "[dim]✗[/dim]"
+        console.print(
+            f"  {mark} {provider}" + (f" [dim]({where})[/dim]" if where else "")
+        )
+
+
+@keys_app.command("import-legacy")
+def keys_import_legacy() -> None:
+    """Import keys from the old encrypted ~/.pithy/keys file."""
+    from ._legacy_keystore import import_legacy
+
+    _run(import_legacy)
+
+
+# Skills commands
+
+
+@skills_app.command("list")
+def skills_list() -> None:
+    """List built-in and project skills."""
+    table = Table("Name", "Source", "Description")
+    for name, (path, source) in _run(skills.discover).items():
+        try:
+            description = skills.parse_skill(path, source).description
+        except Exception as e:
+            description = f"[red]invalid: {e}[/red]"
+        table.add_row(name, source, description)
+    console.print(table)
+
+
+@skills_app.command("new")
+def skills_new(
+    name: str = typer.Argument(..., help="Skill name (lowercase, hyphens)"),
+    description: str = typer.Option(
+        "", "--description", "-d", help="What the skill does and when to use it"
+    ),
+) -> None:
+    """Create a skill in .agents/skills/ and open it in your editor."""
+    skill_md = _run(skills.new_skill, name, description)
+    console.print(f"📝 Created {skill_md}")
+    _edit_and_validate(skill_md)
+
+
+@skills_app.command("edit")
+def skills_edit(name: str) -> None:
+    """Edit a skill (copies a built-in into .agents/skills/ first)."""
+    skill_md = _run(skills.edit_skill, name)
+    _edit_and_validate(skill_md)
+
+
+@skills_app.command("reset")
+def skills_reset(name: str) -> None:
+    """Delete the project override of a built-in skill."""
+    _run(skills.override_path, name)  # fail before asking for confirmation
+    typer.confirm(f"Delete your project override of '{name}'?", abort=True)
+    path = _run(skills.reset_skill, name)
+    console.print(f"✓ Removed {path}; using built-in '{name}'")
+
+
+@skills_app.command("run")
+def skills_run(
+    name: str,
+    paths: list[Path] = typer.Argument(None, help="Input files (default: stdin)"),
+) -> None:
+    """Run a skill on files or stdin and print the result."""
+    if paths:
+        user_input = "\n\n".join(
+            skills.format_file(str(p), p.read_text(encoding="utf-8")) for p in paths
+        )
+    elif not sys.stdin.isatty():
+        user_input = sys.stdin.read()
+    else:
+        typer.echo("Error: provide input files or pipe input on stdin", err=True)
         raise typer.Exit(1)
 
-@keys_app.command()
-def remove(name: str) -> None:
-    """Remove a key."""
-    try:
-        remove_key(name)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+    typer.echo(_run(skills.run_skill, name, user_input))
 
-@keys_app.command("unlock")
-def unlock_cmd(ttl: float = 8.0) -> None:
-    """Unlock keystore."""
-    try:
-        unlock(ttl)
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
 
-@keys_app.command("lock")
-def lock_cmd() -> None:
-    """Lock keystore."""
+def _edit_and_validate(skill_md: Path) -> None:
+    exit_code = skills.open_in_editor(skill_md)
+    if exit_code != 0:
+        console.print(f"⚠️  Editor exited with code {exit_code}", style="yellow")
     try:
-        lock()
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
+        skill = skills.parse_skill(skill_md.parent)
+    except ValueError as e:
+        console.print(f"⚠️  {e}", style="yellow")
+        return
+    console.print(f"✨ Skill '{skill.name}' saved.", style="green")
 
-@keys_app.command("migrate")
-def migrate_cmd() -> None:
-    """Migrate legacy key names to new standard format."""
-    try:
-        migrate_legacy_keys()
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
-
-@keys_app.command("providers")
-def providers_cmd() -> None:
-    """List all providers and their key status."""
-    try:
-        from rich.console import Console
-        console = Console()
-
-        providers = list_providers()
-        console.print("\n[bold]Provider Status:[/bold]")
-        for provider, has_key in providers.items():
-            status = "[green]✓[/green]" if has_key else "[dim]✗[/dim]"
-            console.print(f"  {status} {provider.value}")
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(1)
 
 if __name__ == "__main__":
     app()

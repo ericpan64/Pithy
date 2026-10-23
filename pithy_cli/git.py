@@ -1,17 +1,37 @@
 """Git operations - pure tactical functions."""
 
 from pathlib import Path
-from typing import Optional
 
-from git import Repo, InvalidGitRepositoryError, GitCommandError
+from git import GitCommandError, InvalidGitRepositoryError, Repo
+
+HOOK_MARKER = "# Pithy AI Commit Hook"
 
 
-def get_repo() -> Optional[Repo]:
+def get_repo() -> Repo | None:
     """Get git repository from current directory."""
     try:
         return Repo(".", search_parent_directories=True)
     except InvalidGitRepositoryError:
         return None
+
+
+def _require_repo() -> Repo:
+    repo = get_repo()
+    if repo is None:
+        raise ValueError("Not in a git repository")
+    return repo
+
+
+def git_path(name: str) -> Path:
+    """
+    Resolve a path inside the git dir (e.g. 'hooks/prepare-commit-msg').
+
+    Uses `git rev-parse --git-path`, which handles subdirectories, worktrees,
+    submodules, and core.hooksPath.
+    """
+    repo = _require_repo()
+    # GitPython runs git in the working tree, so relative output is relative to it
+    return Path(repo.working_dir) / str(repo.git.rev_parse("--git-path", name))
 
 
 def has_staged_changes() -> bool:
@@ -28,41 +48,33 @@ def has_staged_changes() -> bool:
         return len(repo.index.entries) > 0
 
 
-def get_staged_diff(max_bytes: int = 120_000) -> str:
-    """
-    Get staged diff with size limit.
-
-    If diff exceeds max_bytes, returns a summary instead.
-    """
+def get_staged_diff(max_chars: int = 400_000) -> str:
+    """Get staged diff; if over max_chars, truncate it and append the --stat."""
     repo = get_repo()
     if not repo:
         return ""
 
     try:
-        diff = repo.git.diff("--cached", "--no-color", "-U3")
-
-        if len(diff) <= max_bytes:
+        diff = str(repo.git.diff("--cached", "--no-color", "-U3"))
+        if len(diff) <= max_chars:
             return diff
 
-        # Fallback: get summary for large diffs
-        return get_staged_summary()
+        stat = repo.git.diff("--cached", "--stat")
+        return f"{diff[:max_chars]}\n\n[Diff truncated at {max_chars} characters. Full stat:]\n{stat}"
     except GitCommandError:
         return ""
 
 
-def get_staged_summary() -> str:
-    """Get summary when diff is too large."""
+def get_recent_subjects(n: int = 10) -> list[str]:
+    """Get the subjects of the last n commits (empty in a new repo)."""
     repo = get_repo()
     if not repo:
-        return ""
+        return []
 
     try:
-        stats = repo.git.diff("--cached", "--stat")
-        status = repo.git.diff("--cached", "--name-status")
-
-        return f"File changes:\n{status}\n\nStats:\n{stats}"
+        return str(repo.git.log(f"-{n}", "--format=%s")).splitlines()
     except GitCommandError:
-        return ""
+        return []
 
 
 def get_repo_name() -> str:
@@ -87,7 +99,7 @@ def get_branch_name() -> str:
         return "HEAD"
 
 
-def read_commit_msg(path: str) -> Optional[str]:
+def read_commit_msg(path: str | Path) -> str | None:
     """Read commit message file."""
     try:
         return Path(path).read_text()
@@ -95,7 +107,7 @@ def read_commit_msg(path: str) -> Optional[str]:
         return None
 
 
-def write_commit_msg(path: str, content: str) -> None:
+def write_commit_msg(path: str | Path, content: str) -> None:
     """Write commit message file."""
     Path(path).write_text(content)
 
@@ -107,10 +119,8 @@ def format_commit_message(title: str, summary: list[str]) -> str:
 
     lines = [title, ""]
     for point in summary:
-        # Handle nested bullet points
-        if point.strip().startswith(("- ", "• ", "*")):
-            lines.append(point)
-        elif point.strip().startswith(("  -", "  •", "  *")):
+        # Keep items that are already bullets (including indented sub-bullets)
+        if point.lstrip().startswith(("- ", "* ", "• ")):
             lines.append(point)
         else:
             lines.append(f"- {point}")
@@ -118,20 +128,28 @@ def format_commit_message(title: str, summary: list[str]) -> str:
     return "\n".join(lines)
 
 
-def install_git_hook(titles: int = 3) -> Path:
+def install_git_hook(titles: int = 3, force: bool = False) -> Path:
     """
     Install git prepare-commit-msg hook.
+
+    Refuses to overwrite a hook not written by Pithy unless force is set.
 
     Returns:
         Path to installed hook
     """
-    hook_path = Path(".git/hooks/prepare-commit-msg")
+    hook_path = git_path("hooks/prepare-commit-msg")
 
-    # Create hook script
+    existing = read_commit_msg(hook_path)
+    if existing is not None and HOOK_MARKER not in existing and not force:
+        raise ValueError(
+            f"A prepare-commit-msg hook already exists at {hook_path}. "
+            "Use --force to replace it."
+        )
+
     hook_path.parent.mkdir(parents=True, exist_ok=True)
 
     hook_content = f"""#!/bin/sh
-# Pithy AI Commit Hook
+{HOOK_MARKER}
 
 # Skip merges/squashes
 case "$2" in
@@ -155,16 +173,17 @@ pithy ai-commit hook "$1" ${{2:+--source "$2"}} --titles {titles}
     return hook_path
 
 
-def uninstall_git_hook() -> Optional[Path]:
+def uninstall_git_hook() -> Path | None:
     """
-    Uninstall git prepare-commit-msg hook.
+    Uninstall the Pithy prepare-commit-msg hook.
 
     Returns:
-        Path to uninstalled hook, or None if not found
+        Path to uninstalled hook, or None if no Pithy hook was found
     """
-    hook_path = Path(".git/hooks/prepare-commit-msg")
+    hook_path = git_path("hooks/prepare-commit-msg")
 
-    if hook_path.exists():
+    existing = read_commit_msg(hook_path)
+    if existing is not None and HOOK_MARKER in existing:
         hook_path.unlink()
         return hook_path
 

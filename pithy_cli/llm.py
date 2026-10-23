@@ -1,244 +1,196 @@
-"""LLM provider abstraction for commit message generation."""
+"""LLM provider table and clients."""
 
 import json
+import os
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol, Optional
-from dataclasses import dataclass
-from pathlib import Path
-
-from .prompt import load_prompt
-from .init import find_git_root
-
-
-class LLMProvider(str, Enum):
-    """Supported LLM providers."""
-    ANTHROPIC = "anthropic"
-    OPENAI = "openai"
-    TOGETHER = "together"
+from typing import Any, Protocol
 
 
 class ModelType(str, Enum):
     """Model speed/capability trade-off."""
+
     REGULAR = "regular"  # Higher capability, slower/more expensive
-    FAST = "fast"       # Lower capability, faster/cheaper
+    FAST = "fast"  # Lower capability, faster/cheaper
+
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    """How to reach a provider and which models to use."""
+
+    env_var: str
+    regular: str
+    fast: str
+    base_url: str | None = None  # None → Anthropic SDK, else OpenAI-compatible
+    token_param: str = "max_tokens"
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+# Order matters: the first provider with a key is used unless PITHY_PROVIDER is set
+PROVIDERS: dict[str, ProviderSpec] = {
+    "anthropic": ProviderSpec(
+        env_var="ANTHROPIC_API_KEY",
+        regular="claude-sonnet-5-5",
+        fast="claude-haiku-5-5",
+    ),
+    "openai": ProviderSpec(
+        env_var="OPENAI_API_KEY",
+        regular="gpt-6.1-sol",
+        fast="gpt-6-luna",
+        base_url="https://api.openai.com/v1",
+        # Reasoning models: reject max_tokens, and reasoning tokens count toward the cap
+        token_param="max_completion_tokens",
+        params={"reasoning_effort": "low"},
+    ),
+    "together": ProviderSpec(
+        env_var="TOGETHER_API_KEY",
+        regular="moonshotai/Kimi-K3",
+        fast="Qwen/Qwen3.5-9B",
+        base_url="https://api.together.ai/v1",
+        # Both models are hybrid reasoners with thinking on by default
+        params={"extra_body": {"reasoning": {"enabled": False}}},
+    ),
+}
 
 
 class LLMClient(Protocol):
     """Protocol for LLM clients."""
 
-    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
-        """Generate completion from prompt."""
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+        schema: dict[str, Any] | None = None,
+    ) -> str:
+        """Generate a completion; returns JSON text when a schema is given."""
         ...
 
 
 @dataclass
 class AnthropicClient:
     """Anthropic Claude client."""
-    api_key: str
-    model_type: ModelType = ModelType.REGULAR
 
-    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
+    api_key: str
+    model: str
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+        schema: dict[str, Any] | None = None,
+    ) -> str:
         from anthropic import Anthropic
 
-        client = Anthropic(api_key=self.api_key)
+        kwargs: dict[str, Any] = {}
+        if schema is not None:
+            kwargs["output_config"] = {
+                "format": {"type": "json_schema", "schema": schema}
+            }
 
-        model = "claude-sonnet-4-5-20250929"
-        if self.model_type == ModelType.FAST:
-            model = "claude-haiku-4-5-20251001"
-
-        response = client.messages.create(
-            model=model,
+        response = Anthropic(api_key=self.api_key).messages.create(
+            model=self.model,
             max_tokens=max_tokens,
-            temperature=0.3,
-            messages=[{"role": "user", "content": prompt}],
+            system=system,
+            messages=[{"role": "user", "content": user}],
+            **kwargs,
         )
-
-        return response.content[0].text
+        return next(
+            str(block.text) for block in response.content if block.type == "text"
+        )
 
 
 @dataclass
-class OpenAIClient:
-    """OpenAI GPT client."""
-    api_key: str
-    model_type: ModelType = ModelType.REGULAR
+class OpenAICompatClient:
+    """Client for OpenAI and OpenAI-compatible APIs (e.g. Together)."""
 
-    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
+    api_key: str
+    model: str
+    spec: ProviderSpec
+
+    def complete(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 4096,
+        schema: dict[str, Any] | None = None,
+    ) -> str:
         from openai import OpenAI
 
-        client = OpenAI(api_key=self.api_key)
+        kwargs: dict[str, Any] = {self.spec.token_param: max_tokens, **self.spec.params}
+        if schema is not None:
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "response", "schema": schema},
+            }
 
-        model = "gpt-5-mini-2025-08-07"
-        if self.model_type == ModelType.FAST:
-            model = "gpt-5-nano-2025-08-07"
-
-        # GPT-5 models are reasoning models: they reject max_tokens and
-        # non-default temperature, and reasoning tokens count toward the cap
+        client = OpenAI(api_key=self.api_key, base_url=self.spec.base_url)
         response = client.chat.completions.create(
-            model=model,
-            max_completion_tokens=max_tokens,
-            reasoning_effort="minimal",
-            messages=[{"role": "user", "content": prompt}],
+            model=self.model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            **kwargs,
         )
-
-        return response.choices[0].message.content
-
-
-@dataclass
-class TogetherClient:
-    """Together AI client (OpenAI-compatible API)."""
-    api_key: str
-    model_type: ModelType = ModelType.REGULAR
-
-    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=self.api_key, base_url="https://api.together.ai/v1")
-
-        model = "moonshotai/Kimi-K3"
-        if self.model_type == ModelType.FAST:
-            model = "Qwen/Qwen3.5-9B"
-
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            temperature=0.3,
-            messages=[{"role": "user", "content": prompt}],
-            # Both models are hybrid reasoners with thinking on by default;
-            # disable it so reasoning tokens don't consume max_tokens
-            extra_body={"reasoning": {"enabled": False}},
-        )
-
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
 
 
-def create_llm_client(
-    provider: LLMProvider,
+def create_client(
+    provider: str,
     api_key: str,
     model_type: ModelType = ModelType.REGULAR,
+    model: str | None = None,
 ) -> LLMClient:
-    """Factory function to create LLM client."""
-    if provider == LLMProvider.ANTHROPIC:
-        return AnthropicClient(api_key=api_key, model_type=model_type)
-    elif provider == LLMProvider.OPENAI:
-        return OpenAIClient(api_key=api_key, model_type=model_type)
-    elif provider == LLMProvider.TOGETHER:
-        return TogetherClient(api_key=api_key, model_type=model_type)
-    else:
+    """Create a client for a provider in PROVIDERS."""
+    spec = PROVIDERS.get(provider)
+    if spec is None:
         raise ValueError(f"Unsupported provider: {provider}")
 
+    model = model or (spec.fast if model_type == ModelType.FAST else spec.regular)
+    if spec.base_url is None:
+        return AnthropicClient(api_key=api_key, model=model)
+    return OpenAICompatClient(api_key=api_key, model=model, spec=spec)
 
-def generate_summary(
-    client: LLMClient,
-    diff: str,
-    repo_name: str,
-    branch: str,
-    git_root: Optional[Path] = None,
-) -> list[str]:
+
+def resolve_client(model_type: ModelType = ModelType.REGULAR) -> LLMClient:
     """
-    Generate summary from git diff.
+    Pick a provider and build its client.
 
-    Pure function - delegates I/O to client.
+    PITHY_PROVIDER forces a provider and PITHY_MODEL overrides the model;
+    otherwise the first provider in PROVIDERS with a key wins.
     """
-    if git_root is None:
-        git_root = find_git_root()
+    from .keys import get_key
 
-    prompt_template = load_prompt("commit-summary", git_root)
-    prompt = prompt_template.format(
-        repo_name=repo_name,
-        branch=branch,
-        diff=diff[:120000],  # Truncate to stay within limits
+    forced = os.environ.get("PITHY_PROVIDER")
+    names = [forced] if forced else list(PROVIDERS)
+
+    for name in names:
+        if name not in PROVIDERS:
+            raise ValueError(
+                f"Unknown PITHY_PROVIDER '{name}'. Choose from: {', '.join(PROVIDERS)}"
+            )
+        if key := get_key(name):
+            return create_client(name, key, model_type, os.environ.get("PITHY_MODEL"))
+
+    raise ValueError(
+        "No API key found. Set one with:\n"
+        + "\n".join(f"  pithy keys set {name}" for name in names)
     )
 
-    response = client.complete(prompt, max_tokens=2000)
 
-    # Parse JSON response
-    try:
-        # Remove markdown code blocks if present
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            cleaned = "\n".join(lines[1:-1])
-
-        data = json.loads(cleaned)
-        return data.get("summary", ["Changes to the codebase"])
-    except json.JSONDecodeError:
-        # Fallback if JSON parsing fails
-        return ["Changes to the codebase"]
-
-
-def generate_titles(
+def complete_json(
     client: LLMClient,
-    summary: list[str],
-    count: int = 3,
-    git_root: Optional[Path] = None,
-) -> list[str]:
-    """
-    Generate commit titles from summary.
-
-    Pure function - delegates I/O to client.
-    """
-    if git_root is None:
-        git_root = find_git_root()
-
-    summary_text = "\n".join(f"- {s}" for s in summary)
-
-    prompt_template = load_prompt("commit-titles", git_root)
-    prompt = prompt_template.format(
-        summary_text=summary_text,
-        count=count,
+    system: str,
+    user: str,
+    schema: dict[str, Any],
+    max_tokens: int = 4096,
+) -> Any:
+    """Run a structured-output completion and parse the JSON result."""
+    return json.loads(
+        client.complete(system, user, max_tokens=max_tokens, schema=schema)
     )
-
-    response = client.complete(prompt, max_tokens=1000)
-
-    # Parse JSON response
-    try:
-        # Remove markdown code blocks if present
-        cleaned = response.strip()
-        if cleaned.startswith("```"):
-            lines = cleaned.split("\n")
-            cleaned = "\n".join(lines[1:-1])
-
-        data = json.loads(cleaned)
-        titles = data.get("titles", [])
-        return titles[:count]
-    except json.JSONDecodeError:
-        # Fallback if JSON parsing fails
-        return [
-            "chore: update staged changes",
-            "feat: add new functionality",
-            "fix: resolve issues",
-        ][:count]
-
-
-def summarize_source_file(
-    client: LLMClient,
-    rel_path: str,
-    language: str,
-    content: str,
-    git_root: Optional[Path] = None,
-) -> str:
-    """
-    Generate markdown summary of a source file via LLM.
-
-    Pure function - delegates I/O to client.
-    """
-    if git_root is None:
-        git_root = find_git_root()
-
-    prompt_template = load_prompt("file-summary", git_root)
-    prompt = prompt_template.format(
-        rel_path=rel_path,
-        language=language,
-        content=content[:120000],  # Truncate to stay within limits
-    )
-
-    response = client.complete(prompt, max_tokens=4000)
-
-    # Strip surrounding code fences if model added them
-    cleaned = response.strip()
-    if cleaned.startswith("```") and cleaned.endswith("```"):
-        lines = cleaned.split("\n")
-        if len(lines) > 2:
-            cleaned = "\n".join(lines[1:-1]).strip()
-
-    return cleaned

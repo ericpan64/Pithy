@@ -42,21 +42,6 @@ def find_git_root(start_path: Path | None = None) -> Path | None:
     return None
 
 
-def ensure_pithy_directory(git_root: Path) -> Path:
-    """
-    Create .pithy directory at git repository root if it doesn't exist.
-
-    Args:
-        git_root: Path to git repository root
-
-    Returns:
-        Path to .pithy directory
-    """
-    pithy_dir = git_root / ".pithy"
-    pithy_dir.mkdir(exist_ok=True)
-    return pithy_dir
-
-
 def read_gitignore(git_root: Path) -> list[str]:
     """
     Read existing .gitignore file and return lines as list.
@@ -154,15 +139,10 @@ def run_init() -> None:
 
     This function:
     1. Finds the git repository root
-    2. Creates .pithy directory
-    3. Copies default prompts to .pithy/prompts/
-    4. Creates .pre-commit-config.yaml
-    5. Updates .gitignore with required entries
-    6. Reports actions taken to user
+    2. Creates .pre-commit-config.yaml
+    3. Updates .gitignore with required entries
+    4. Reports actions taken to user
     """
-    # Import here to avoid circular dependency
-    from .prompt import copy_default_prompts, get_prompts_dir
-
     # Find git repository root
     git_root = find_git_root()
 
@@ -175,19 +155,6 @@ def run_init() -> None:
 
     typer.echo(f"📍 Found git repository at: {git_root}")
 
-    # Create .pithy directory
-    pithy_dir = ensure_pithy_directory(git_root)
-    if pithy_dir.exists():
-        typer.echo(f"📁 Ensured .pithy directory exists at: {pithy_dir}")
-
-    # Copy default prompts
-    prompts_dir = get_prompts_dir(git_root)
-    copied = copy_default_prompts(prompts_dir)
-    if copied:
-        typer.echo(f"📝 Copied default prompts: {', '.join(copied)}")
-    else:
-        typer.echo("✅ Prompts directory ready (defaults already present)")
-
     # Create pre-commit config
     if create_pre_commit_config(git_root):
         typer.echo("📝 Created .pre-commit-config.yaml with default hooks")
@@ -196,7 +163,7 @@ def run_init() -> None:
         typer.echo("✅ .pre-commit-config.yaml already exists")
 
     # Update .gitignore
-    required_entries = [".pithy/", ".DS_Store", ".specstory/", ".cursor*", ".claude*"]
+    required_entries = [".pithy/", ".DS_Store"]
 
     added_entries, was_modified = update_gitignore(git_root, required_entries)
 
