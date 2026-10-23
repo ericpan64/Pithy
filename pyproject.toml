@@ -6,8 +6,6 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic>=2.2.0",
-    "argon2-cffi>=25.1.0",
-    "cryptography>=46.0.2",
     "gitpython>=3.1.45",
     "keyring>=25.7.0",
     "openai>=3.37.0",

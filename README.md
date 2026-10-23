@@ -49,7 +49,6 @@ Credential Manager, or Secret Service on Linux).
 pithy keys set anthropic      # or: openai, together
 pithy keys list               # which providers have keys, and where from
 pithy keys remove anthropic
-pithy keys import-legacy      # one-time import from the old ~/.pithy/keys file
 ```
 
 The first provider with a key is used, in the order anthropic, openai, together.

@@ -135,14 +135,6 @@ def keys_list() -> None:
         )
 
 
-@keys_app.command("import-legacy")
-def keys_import_legacy() -> None:
-    """Import keys from the old encrypted ~/.pithy/keys file."""
-    from ._legacy_keystore import import_legacy
-
-    _run(import_legacy)
-
-
 # Skills commands
 
 
