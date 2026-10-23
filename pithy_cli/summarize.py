@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from .git import get_repo
+from .git import git, require_root
 from .llm import resolve_client
 from .skills import format_file, load_skill
 
@@ -20,13 +20,15 @@ def list_files(target: Path, excludes: list[str]) -> tuple[Path, list[Path]]:
     Returns:
         Tuple of (git root, absolute file paths)
     """
-    repo = get_repo()
-    if repo is None:
-        raise ValueError("Not in a git repository")
-
-    root = Path(repo.working_dir)
-    output = repo.git.ls_files(
-        "--cached", "--others", "--exclude-standard", "--", str(target)
+    root = require_root()
+    output = git(
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        str(target),
+        cwd=root,
     )
     patterns = excludes + DEFAULT_EXCLUDES
 

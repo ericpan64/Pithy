@@ -8,7 +8,6 @@ from rich.console import Console
 from rich.table import Table
 
 from . import ai_commit, git, keys, skills
-from .init import run_init
 from .summarize import run_summarize
 
 app = typer.Typer()
@@ -35,12 +34,6 @@ def _run(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
 
 
 @app.command()
-def init() -> None:
-    """Set up pre-commit config and .gitignore entries."""
-    run_init()
-
-
-@app.command()
 def summarize(
     path: str = typer.Argument(".", help="File or directory to summarize"),
     output: str | None = typer.Option(
@@ -62,13 +55,10 @@ def summarize(
 
 @ai_commit_app.command()
 def install(
-    titles: int = typer.Option(
-        3, "--titles", "-n", help="Number of title options to generate"
-    ),
     force: bool = typer.Option(False, "--force", help="Replace an existing hook"),
 ) -> None:
-    """Install git hook for AI commit messages."""
-    hook_path = _run(git.install_git_hook, titles=titles, force=force)
+    """Install git hook that drafts the message before your editor opens."""
+    hook_path = _run(git.install_git_hook, force=force)
     console.print(f"[green]✅ Git hook installed at:[/green] {hook_path}")
 
 
@@ -86,23 +76,18 @@ def uninstall() -> None:
 def hook(
     file: str = typer.Argument(..., help="Commit message file"),
     source: str | None = typer.Option(None, "--source", help="Commit source"),
-    titles: int = typer.Option(3, "--titles", help="Number of titles"),
-    non_interactive: bool = typer.Option(
-        False, "--non-interactive", help="Non-interactive mode"
-    ),
 ) -> None:
     """Hook handler (internal use by git)."""
-    ai_commit.run_hook(file, source, titles, non_interactive)
+    ai_commit.run_hook(file, source)
 
 
 @ai_commit_app.command()
 def generate(
     titles: int = typer.Option(3, "--titles", "-n", help="Number of title options"),
-    apply: bool = typer.Option(False, "--apply", help="Write to COMMIT_EDITMSG"),
     json: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
-    """Generate commit message manually."""
-    ai_commit.run_generate(titles, apply, json)
+    """Print commit title options and a summary for staged changes."""
+    _run(ai_commit.run_generate, titles, json)
 
 
 # Key commands
@@ -169,15 +154,6 @@ def skills_edit(name: str) -> None:
     """Edit a skill (copies a built-in into .agents/skills/ first)."""
     skill_md = _run(skills.edit_skill, name)
     _edit_and_validate(skill_md)
-
-
-@skills_app.command("reset")
-def skills_reset(name: str) -> None:
-    """Delete the project override of a built-in skill."""
-    _run(skills.override_path, name)  # fail before asking for confirmation
-    typer.confirm(f"Delete your project override of '{name}'?", abort=True)
-    path = _run(skills.reset_skill, name)
-    console.print(f"✓ Removed {path}; using built-in '{name}'")
 
 
 @skills_app.command("run")

@@ -1,6 +1,5 @@
 """LLM provider table and clients."""
 
-import json
 import os
 from dataclasses import dataclass, field
 from enum import Enum
@@ -180,17 +179,4 @@ def resolve_client(model_type: ModelType = ModelType.REGULAR) -> LLMClient:
     raise ValueError(
         "No API key found. Set one with:\n"
         + "\n".join(f"  pithy keys set {name}" for name in names)
-    )
-
-
-def complete_json(
-    client: LLMClient,
-    system: str,
-    user: str,
-    schema: dict[str, Any],
-    max_tokens: int = 4096,
-) -> Any:
-    """Run a structured-output completion and parse the JSON result."""
-    return json.loads(
-        client.complete(system, user, max_tokens=max_tokens, schema=schema)
     )

@@ -12,7 +12,12 @@ from unittest.mock import Mock, patch
 import pytest
 from typer.testing import CliRunner
 
-from pithy_cli.ai_commit import COMMIT_SCHEMA, generate_commit_message
+from pithy_cli.ai_commit import (
+    COMMIT_SCHEMA,
+    CommitMessage,
+    generate_commit_message,
+    run_hook,
+)
 from pithy_cli.cli import app
 from pithy_cli.git import (
     format_commit_message,
@@ -91,6 +96,16 @@ def test_get_staged_diff_truncates_and_appends_stat(git_repo):
     assert "big.txt" in diff.split("Full stat:]")[1]
 
 
+def test_has_staged_changes_before_first_commit(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    (tmp_path / "a.txt").write_text("a")
+    subprocess.run(["git", "add", "a.txt"], check=True)
+
+    assert has_staged_changes()
+    assert get_recent_subjects() == []
+
+
 def test_get_recent_subjects(git_repo):
     assert get_recent_subjects() == ["chore: initial commit"]
 
@@ -135,14 +150,80 @@ def test_generate_commit_message_requires_staged_changes(git_repo):
 
 @patch("pithy_cli.ai_commit.generate_commit_message")
 def test_generate_json_output(mock_generate, git_repo):
-    from pithy_cli.ai_commit import CommitMessage
-
     mock_generate.return_value = CommitMessage(["Add X"], ["feat: add x"])
 
     result = runner.invoke(app, ["ai-commit", "generate", "--json"])
 
     assert result.exit_code == 0
-    assert '"titles"' in result.stdout
+    assert json.loads(result.stdout) == {
+        "summary": ["Add X"],
+        "titles": ["feat: add x"],
+    }
+
+
+@patch("pithy_cli.ai_commit.generate_commit_message")
+def test_generate_text_output(mock_generate, git_repo):
+    mock_generate.return_value = CommitMessage(["Add X"], ["feat: add x", "feat: x"])
+
+    result = runner.invoke(app, ["ai-commit", "generate", "-n", "2"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "1. feat: add x\n2. feat: x\n\n- Add X\n"
+    mock_generate.assert_called_once_with(titles_count=2)
+
+
+def test_generate_without_staged_changes_errors(git_repo):
+    result = runner.invoke(app, ["ai-commit", "generate"])
+
+    assert result.exit_code == 1
+    assert "No staged changes" in result.output
+
+
+# Hook handler
+
+
+def _stage(repo: Path) -> None:
+    (repo / "feature.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "feature.py"], check=True)
+
+
+@patch("pithy_cli.ai_commit.generate_commit_message")
+def test_run_hook_prepends_message_and_keeps_comments(mock_generate, git_repo):
+    _stage(git_repo)
+    mock_generate.return_value = CommitMessage(["Add X"], ["feat: add x"])
+    msg_file = git_repo / ".git/COMMIT_EDITMSG"
+    msg_file.write_text("\n# Please enter the commit message\n")
+
+    run_hook(str(msg_file))
+
+    assert msg_file.read_text() == (
+        "feat: add x\n\n- Add X\n\n# Please enter the commit message\n"
+    )
+
+
+@pytest.mark.parametrize("source", ["message", "merge", "commit"])
+@patch("pithy_cli.ai_commit.generate_commit_message")
+def test_run_hook_skips_sources_with_messages(mock_generate, source, git_repo):
+    _stage(git_repo)
+    msg_file = git_repo / ".git/COMMIT_EDITMSG"
+    msg_file.write_text("my message\n")
+
+    run_hook(str(msg_file), source)
+
+    mock_generate.assert_not_called()
+    assert msg_file.read_text() == "my message\n"
+
+
+@patch("pithy_cli.ai_commit.generate_commit_message", side_effect=ValueError("boom"))
+def test_run_hook_errors_never_block_commit(_mock_generate, git_repo, capsys):
+    _stage(git_repo)
+    msg_file = git_repo / ".git/COMMIT_EDITMSG"
+    msg_file.write_text("# comments\n")
+
+    run_hook(str(msg_file))  # must not raise
+
+    assert msg_file.read_text() == "# comments\n"
+    assert "boom" in capsys.readouterr().err
 
 
 # Hook install/uninstall
@@ -153,11 +234,11 @@ def _hook(repo: Path) -> Path:
 
 
 def test_install_hook_creates_executable_file(git_repo):
-    result = runner.invoke(app, ["ai-commit", "install", "--titles", "5"])
+    result = runner.invoke(app, ["ai-commit", "install"])
 
     assert result.exit_code == 0
     assert _hook(git_repo).stat().st_mode & 0o100
-    assert "--titles 5" in _hook(git_repo).read_text()
+    assert 'pithy ai-commit hook "$1"' in _hook(git_repo).read_text()
 
 
 def test_install_hook_from_subdirectory(git_repo, monkeypatch):

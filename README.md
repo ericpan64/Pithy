@@ -56,14 +56,18 @@ Override with `PITHY_PROVIDER=together` and, optionally, `PITHY_MODEL=<model id>
 
 ### AI commit messages
 
-One structured LLM call turns your staged diff into a bulleted summary and
-several conventional-commit title options, matching the style of your recent commits.
+One structured LLM call turns your staged diff into a conventional-commit title
+and a bulleted summary, matching the style of your recent commits.
+
+With the hook installed, `git commit` drafts the message and then opens your
+editor on it as usual, so you review and edit it there. Commits that already have
+a message (`-m`, merges, amends) are left alone, and errors never block a commit.
 
 ```bash
 pithy ai-commit install            # prepare-commit-msg hook (works in subdirs and worktrees)
 pithy ai-commit install --force    # replace an existing non-Pithy hook
-pithy ai-commit generate           # pick a message interactively
-pithy ai-commit generate --json    # print summary and titles as JSON
+pithy ai-commit generate -n 3      # print 3 title options and a summary
+pithy ai-commit generate --json    # same, as JSON
 pithy ai-commit uninstall
 ```
 
@@ -111,7 +115,6 @@ name as a built-in (`commit-message`, `repo-overview`) overrides it.
 pithy skills list                              # built-in, project, and override skills
 pithy skills new changelog -d "Release notes"  # scaffold and open in $EDITOR
 pithy skills edit commit-message               # copies the built-in into .agents/skills/ first
-pithy skills reset commit-message              # delete the override, back to built-in
 git log --oneline -20 | pithy skills run changelog
 pithy skills run repo-overview src/app.py src/util.py
 ```

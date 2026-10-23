@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from .init import find_git_root
+from .git import repo_root
 from .llm import ModelType, resolve_client
 
 BUILTIN_DIR = Path(__file__).parent / "builtin_skills"
@@ -87,7 +87,7 @@ def parse_skill(skill_dir: Path, source: str = "project") -> Skill:
 
 def project_skills_dir(git_root: Path | None = None) -> Path:
     """Return <git root>/.agents/skills, or raise outside a git repository."""
-    root = git_root or find_git_root()
+    root = git_root or repo_root()
     if root is None:
         raise ValueError("Not in a git repository")
     return root / PROJECT_SUBDIR
@@ -101,7 +101,7 @@ def discover(git_root: Path | None = None) -> dict[str, tuple[Path, str]]:
         if (d / "SKILL.md").exists()
     }
 
-    root = git_root or find_git_root()
+    root = git_root or repo_root()
     project_dir = root / PROJECT_SUBDIR if root else None
     if project_dir and project_dir.is_dir():
         for d in sorted(project_dir.iterdir()):
@@ -161,21 +161,6 @@ def edit_skill(name: str, git_root: Path | None = None) -> Path:
         shutil.copytree(path, target)
         path = target
     return path / "SKILL.md"
-
-
-def override_path(name: str, git_root: Path | None = None) -> Path:
-    """Return the project directory overriding built-in skill `name`."""
-    path, source = discover(git_root).get(name, (None, None))
-    if path is None or source != "override":
-        raise ValueError(f"'{name}' is not a project override of a built-in skill")
-    return path
-
-
-def reset_skill(name: str, git_root: Path | None = None) -> Path:
-    """Delete a project override of a built-in skill; returns the removed dir."""
-    path = override_path(name, git_root)
-    shutil.rmtree(path)
-    return path
 
 
 def format_file(label: str, content: str) -> str:

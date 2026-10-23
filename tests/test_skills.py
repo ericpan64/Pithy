@@ -18,7 +18,6 @@ from pithy_cli.skills import (
     load_skill,
     new_skill,
     parse_skill,
-    reset_skill,
     run_skill,
     validate_name,
 )
@@ -133,7 +132,7 @@ def test_load_skill_not_found(git_repo):
         load_skill("missing")
 
 
-# new / edit / reset
+# new / edit
 
 
 def test_new_skill(git_repo):
@@ -156,25 +155,17 @@ def test_new_skill_invalid_name(git_repo):
         new_skill("Bad Name")
 
 
-def test_edit_builtin_copies_to_project_then_reset(git_repo):
+def test_edit_builtin_copies_to_project(git_repo):
     skill_md = edit_skill("commit-message")
 
     assert skill_md == git_repo / ".agents/skills/commit-message/SKILL.md"
     assert discover()["commit-message"][1] == "override"
 
-    reset_skill("commit-message")
 
-    assert not skill_md.exists()
-    assert discover()["commit-message"][1] == "built-in"
+def test_edit_project_skill_in_place(git_repo):
+    skill_md = new_skill("demo")
 
-
-def test_reset_rejects_builtin_and_project_only(git_repo):
-    new_skill("demo")
-
-    with pytest.raises(ValueError, match="not a project override"):
-        reset_skill("commit-message")
-    with pytest.raises(ValueError, match="not a project override"):
-        reset_skill("demo")
+    assert edit_skill("demo") == skill_md
 
 
 # run
@@ -222,16 +213,6 @@ def test_cli_skills_new_opens_editor(git_repo):
     assert result.exit_code == 0
     editor.assert_called_once()
     assert "saved" in result.stdout
-
-
-def test_cli_skills_reset_fails_before_confirm(git_repo):
-    new_skill("demo")
-
-    result = runner.invoke(app, ["skills", "reset", "demo"])
-
-    assert result.exit_code == 1
-    assert "not a project override" in result.output
-    assert "Delete" not in result.output
 
 
 def test_cli_skills_list_shows_invalid(git_repo):
