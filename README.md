@@ -181,10 +181,13 @@ Before using summarization, configure your LLM provider API key:
 
 ```bash
 # For Anthropic Claude
-pithy keys set anthropic
+pithy keys set Anthropic
 
 # For OpenAI GPT
-pithy keys set openai
+pithy keys set OpenAI
+
+# For Together AI (open-weight models: Kimi K3, Qwen)
+pithy keys set Together
 
 # Check provider status
 pithy keys providers

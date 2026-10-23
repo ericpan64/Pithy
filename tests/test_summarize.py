@@ -27,7 +27,7 @@ from pithy_cli.llm import LLMClient
 class StubLLMClient:
     """Stub LLM client for deterministic testing."""
 
-    def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
         """Return deterministic summary with required structure."""
         # Extract path from prompt for more realistic output
         lines = prompt.split("\n")

@@ -14,6 +14,7 @@ class LLMProvider(str, Enum):
     """Supported LLM providers."""
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    TOGETHER = "together"
 
 
 class ModelType(str, Enum):
@@ -25,7 +26,7 @@ class ModelType(str, Enum):
 class LLMClient(Protocol):
     """Protocol for LLM clients."""
 
-    def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
         """Generate completion from prompt."""
         ...
 
@@ -36,7 +37,7 @@ class AnthropicClient:
     api_key: str
     model_type: ModelType = ModelType.REGULAR
 
-    def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
         from anthropic import Anthropic
 
         client = Anthropic(api_key=self.api_key)
@@ -61,7 +62,7 @@ class OpenAIClient:
     api_key: str
     model_type: ModelType = ModelType.REGULAR
 
-    def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
         from openai import OpenAI
 
         client = OpenAI(api_key=self.api_key)
@@ -70,11 +71,41 @@ class OpenAIClient:
         if self.model_type == ModelType.FAST:
             model = "gpt-5-nano-2025-08-07"
 
+        # GPT-5 models are reasoning models: they reject max_tokens and
+        # non-default temperature, and reasoning tokens count toward the cap
+        response = client.chat.completions.create(
+            model=model,
+            max_completion_tokens=max_tokens,
+            reasoning_effort="minimal",
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        return response.choices[0].message.content
+
+
+@dataclass
+class TogetherClient:
+    """Together AI client (OpenAI-compatible API)."""
+    api_key: str
+    model_type: ModelType = ModelType.REGULAR
+
+    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=self.api_key, base_url="https://api.together.ai/v1")
+
+        model = "moonshotai/Kimi-K3"
+        if self.model_type == ModelType.FAST:
+            model = "Qwen/Qwen3.5-9B"
+
         response = client.chat.completions.create(
             model=model,
             max_tokens=max_tokens,
             temperature=0.3,
             messages=[{"role": "user", "content": prompt}],
+            # Both models are hybrid reasoners with thinking on by default;
+            # disable it so reasoning tokens don't consume max_tokens
+            extra_body={"reasoning": {"enabled": False}},
         )
 
         return response.choices[0].message.content
@@ -90,6 +121,8 @@ def create_llm_client(
         return AnthropicClient(api_key=api_key, model_type=model_type)
     elif provider == LLMProvider.OPENAI:
         return OpenAIClient(api_key=api_key, model_type=model_type)
+    elif provider == LLMProvider.TOGETHER:
+        return TogetherClient(api_key=api_key, model_type=model_type)
     else:
         raise ValueError(f"Unsupported provider: {provider}")
 
@@ -116,7 +149,7 @@ def generate_summary(
         diff=diff[:120000],  # Truncate to stay within limits
     )
 
-    response = client.complete(prompt, max_tokens=500)
+    response = client.complete(prompt, max_tokens=2000)
 
     # Parse JSON response
     try:
@@ -155,7 +188,7 @@ def generate_titles(
         count=count,
     )
 
-    response = client.complete(prompt, max_tokens=500)
+    response = client.complete(prompt, max_tokens=1000)
 
     # Parse JSON response
     try:
@@ -199,7 +232,7 @@ def summarize_source_file(
         content=content[:120000],  # Truncate to stay within limits
     )
 
-    response = client.complete(prompt, max_tokens=800)
+    response = client.complete(prompt, max_tokens=4000)
 
     # Strip surrounding code fences if model added them
     cleaned = response.strip()

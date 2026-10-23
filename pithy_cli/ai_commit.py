@@ -55,6 +55,7 @@ def get_provider_config() -> tuple[LLMProvider, str]:
     provider_map = {
         Provider.ANTHROPIC: LLMProvider.ANTHROPIC,
         Provider.OPENAI: LLMProvider.OPENAI,
+        Provider.TOGETHER: LLMProvider.TOGETHER,
     }
 
     # Try each provider in order
@@ -69,6 +70,8 @@ def get_provider_config() -> tuple[LLMProvider, str]:
         return LLMProvider.ANTHROPIC, key
     if key := os.environ.get("OPENAI_API_KEY"):
         return LLMProvider.OPENAI, key
+    if key := os.environ.get("TOGETHER_API_KEY"):
+        return LLMProvider.TOGETHER, key
 
     from .keys import PROVIDER_KEYS
 
@@ -76,7 +79,9 @@ def get_provider_config() -> tuple[LLMProvider, str]:
         "No API key found. Set one with:\n"
         f"  pithy keys set {PROVIDER_KEYS[Provider.ANTHROPIC]}\n"
         "  or\n"
-        f"  pithy keys set {PROVIDER_KEYS[Provider.OPENAI]}"
+        f"  pithy keys set {PROVIDER_KEYS[Provider.OPENAI]}\n"
+        "  or\n"
+        f"  pithy keys set {PROVIDER_KEYS[Provider.TOGETHER]}"
     )
 
 

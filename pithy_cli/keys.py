@@ -36,18 +36,21 @@ class Provider(str, Enum):
     """Supported API providers."""
     ANTHROPIC = "Anthropic"
     OPENAI = "OpenAI"
+    TOGETHER = "Together"
 
 
 # Provider key mapping - single source of truth
 PROVIDER_KEYS = {
     Provider.ANTHROPIC: "Anthropic",
     Provider.OPENAI: "OpenAI",
+    Provider.TOGETHER: "Together",
 }
 
 # Backward compatibility mapping
 LEGACY_KEY_NAMES = {
     "ANTHROPIC_API_KEY": Provider.ANTHROPIC,
     "OPENAI_API_KEY": Provider.OPENAI,
+    "TOGETHER_API_KEY": Provider.TOGETHER,
 }
 
 

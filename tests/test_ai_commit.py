@@ -19,6 +19,7 @@ from pithy_cli.llm import (
     create_llm_client,
     AnthropicClient,
     OpenAIClient,
+    TogetherClient,
 )
 from pithy_cli.cli import app
 
@@ -87,6 +88,33 @@ def test_create_llm_client_openai():
     assert client.api_key == "test-key"
 
 
+def test_create_llm_client_together():
+    """Test creating Together AI LLM client."""
+    client = create_llm_client(LLMProvider.TOGETHER, "test-key")
+
+    assert isinstance(client, TogetherClient)
+    assert client.api_key == "test-key"
+
+
+@patch("openai.OpenAI")
+def test_together_client_complete(mock_openai):
+    """Test Together client targets Together's endpoint with reasoning disabled."""
+    mock_response = Mock()
+    mock_response.choices = [Mock(message=Mock(content="hello"))]
+    mock_openai.return_value.chat.completions.create.return_value = mock_response
+
+    result = TogetherClient(api_key="test-key").complete("prompt", max_tokens=100)
+
+    assert result == "hello"
+    mock_openai.assert_called_once_with(
+        api_key="test-key", base_url="https://api.together.ai/v1"
+    )
+    kwargs = mock_openai.return_value.chat.completions.create.call_args.kwargs
+    assert kwargs["model"] == "moonshotai/Kimi-K3"
+    assert kwargs["max_tokens"] == 100
+    assert kwargs["extra_body"] == {"reasoning": {"enabled": False}}
+
+
 def test_create_llm_client_invalid_provider():
     """Test that invalid provider raises error."""
     with pytest.raises(ValueError, match="Unsupported provider"):
@@ -98,7 +126,7 @@ def test_create_llm_client_invalid_provider():
 class MockLLMClient:
     """Mock LLM client for testing."""
 
-    def complete(self, prompt: str, max_tokens: int = 500) -> str:
+    def complete(self, prompt: str, max_tokens: int = 4096) -> str:
         """Return mock JSON response."""
         if "summary" in prompt.lower():
             return '''{"summary": ["Add new feature", "Update tests", "Fix bug"]}'''

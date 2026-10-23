@@ -454,9 +454,10 @@ def test_list_providers_empty(temp_pithy_dir):
     """Test listing providers with no keys."""
     providers = list_providers()
 
-    assert len(providers) == 2
+    assert len(providers) == 3
     assert providers[Provider.ANTHROPIC] is False
     assert providers[Provider.OPENAI] is False
+    assert providers[Provider.TOGETHER] is False
 
 
 def test_list_providers_with_keys(temp_pithy_dir, mock_getpass):
