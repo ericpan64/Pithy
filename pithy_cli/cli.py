@@ -156,7 +156,9 @@ def config_list() -> None:
     elif provider := settings.get("provider"):
         where = "config"
     else:
-        provider, where = "first provider with a key", "default"
+        keyed = (name for name in PROVIDERS if keys.get_key(name))
+        provider = _run(next, keyed, None) or "none (no API keys found)"
+        where = "first provider with a key"
     console.print(f"\n[bold]Provider:[/bold] {provider} [dim]({where})[/dim]")
     if model := os.environ.get("PITHY_MODEL"):
         console.print(f"[bold]Model:[/bold] {model} [dim](env, overrides both)[/dim]")

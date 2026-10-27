@@ -98,6 +98,24 @@ def test_unset_missing_key_is_noop():
     assert config.load() == {}
 
 
+@pytest.mark.parametrize(
+    "text, error",
+    [
+        ("provider = 1", "provider must be a string"),
+        ('together = "model"', r"\[together\] must be a table"),
+        ("[together]\nmodel = 1", "together.model must be a model id"),
+        ('[together]\nmodel = "  "', "together.model must be a model id"),
+        ('[together]\ntemperature = "1"', "unknown key 'together.temperature'"),
+        ('theme = "dark"', "unknown key 'theme'"),
+    ],
+)
+def test_load_rejects_bad_schema(text, error):
+    config.config_path().write_text(text)
+
+    with pytest.raises(ValueError, match=error):
+        config.load()
+
+
 def test_load_invalid_toml():
     path = config.config_path()
     path.write_text("provider = [unclosed")
@@ -136,6 +154,20 @@ def test_cli_config_list_shows_env_overrides(monkeypatch):
     assert "env/model" in result.stdout
 
 
+def test_cli_config_list_resolves_first_keyed_provider(monkeypatch):
+    monkeypatch.setenv("TOGETHER_API_KEY", "tg-key")
+
+    result = runner.invoke(app, ["config", "list"])
+
+    assert "Provider: together (first provider with a key)" in result.stdout
+
+
+def test_cli_config_list_without_keys():
+    result = runner.invoke(app, ["config", "list"])
+
+    assert "none (no API keys found)" in result.stdout
+
+
 def test_cli_config_set_bad_key():
     result = runner.invoke(app, ["config", "set", "bogus", "x"])
 
@@ -143,6 +175,7 @@ def test_cli_config_set_bad_key():
     assert "Unknown key" in result.output
 
 
-def test_config_file_isolated_from_home():
+def test_config_file_isolated_from_real_config():
     # The autouse fixture points PITHY_CONFIG at a temp file
-    assert Path.home() not in config.config_path().parents
+    real = Path.home() / ".config" / "pithy" / "config.toml"
+    assert config.config_path() != real

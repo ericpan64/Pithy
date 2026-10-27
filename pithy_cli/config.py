@@ -32,14 +32,34 @@ def _split(key: str) -> tuple[str, str | None]:
 
 
 def load() -> dict[str, Any]:
-    """Read the config file; a missing file is an empty config."""
+    """Read and validate the config file; a missing file is an empty config."""
     path = config_path()
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except tomllib.TOMLDecodeError as e:
         raise ValueError(f"{path}: invalid TOML: {e}") from e
+    _validate(data, path)
+    return data
+
+
+def _validate(data: dict[str, Any], path: Path) -> None:
+    """Allow only `provider = "<name>"` and [<provider>] tables of string models."""
+    for key, value in data.items():
+        if key == "provider":
+            if not isinstance(value, str):
+                raise ValueError(f"{path}: provider must be a string")
+        elif key in PROVIDERS:
+            if not isinstance(value, dict):
+                raise ValueError(f"{path}: [{key}] must be a table")
+            for name, model in value.items():
+                if name not in MODEL_KEYS:
+                    raise ValueError(f"{path}: unknown key '{key}.{name}'")
+                if not isinstance(model, str) or not model.strip():
+                    raise ValueError(f"{path}: {key}.{name} must be a model id string")
+        else:
+            raise ValueError(f"{path}: unknown key '{key}'")
 
 
 def get(key: str) -> str | None:
