@@ -27,7 +27,10 @@ class MemoryKeyring(KeyringBackend):
 
 
 @pytest.fixture(autouse=True)
-def memory_keyring(monkeypatch) -> MemoryKeyring:
+def memory_keyring(monkeypatch, tmp_path) -> MemoryKeyring:
+    # Never read or write the user's real config file
+    monkeypatch.setenv("PITHY_CONFIG", str(tmp_path / "pithy-config.toml"))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     for spec in PROVIDERS.values():
         monkeypatch.delenv(spec.env_var, raising=False)
     monkeypatch.delenv("PITHY_PROVIDER", raising=False)

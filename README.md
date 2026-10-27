@@ -52,9 +52,27 @@ pithy keys remove anthropic
 ```
 
 The first provider with a key is used, in the order anthropic, openai, together.
-Override with `PITHY_PROVIDER=together` and, optionally, `PITHY_MODEL=<model id>`.
-Provider-specific options tuned for the default models (such as OpenAI's
-`reasoning_effort`) are not sent with a `PITHY_MODEL` override.
+
+### Models
+
+Each provider has a regular model and a fast model (used by skills with
+`pithy-model: fast`). Save a provider and per-provider models with `pithy config`:
+
+```bash
+pithy config set provider together                    # always use Together
+pithy config set together.model moonshotai/Kimi-K3    # regular model
+pithy config set together.fast-model Qwen/Qwen3.5-9B  # fast model
+pithy config list                                     # what's in effect, and from where
+pithy config unset together.model                     # back to the default
+```
+
+Settings live in `~/.config/pithy/config.toml` (or `$XDG_CONFIG_HOME/pithy/`,
+or the path in `$PITHY_CONFIG`), so they also apply to the git hook.
+Environment variables win over the file: `PITHY_PROVIDER=<provider>` and
+`PITHY_MODEL=<model id>` (which replaces both the regular and fast model).
+
+Options tuned for the built-in models, such as OpenAI's `reasoning_effort`,
+are not sent with a custom model.
 
 ### AI commit messages
 

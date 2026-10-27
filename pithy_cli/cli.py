@@ -1,3 +1,4 @@
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -7,17 +8,20 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import ai_commit, git, keys, skills
+from . import ai_commit, config, git, keys, skills
+from .llm import PROVIDERS
 from .summarize import run_summarize
 
 app = typer.Typer()
 keys_app = typer.Typer()
 ai_commit_app = typer.Typer()
 skills_app = typer.Typer()
+config_app = typer.Typer()
 
 app.add_typer(keys_app, name="keys", help="API key management")
 app.add_typer(ai_commit_app, name="ai-commit", help="AI-powered commit messages")
 app.add_typer(skills_app, name="skills", help="Agent Skills management")
+app.add_typer(config_app, name="config", help="Provider and model settings")
 
 console = Console()
 
@@ -118,6 +122,57 @@ def keys_list() -> None:
         console.print(
             f"  {mark} {provider}" + (f" [dim]({where})[/dim]" if where else "")
         )
+
+
+# Config commands
+
+
+@config_app.command("set")
+def config_set(
+    key: str = typer.Argument(
+        ..., help="provider, <provider>.model, or <provider>.fast-model"
+    ),
+    value: str = typer.Argument(..., help="Provider name or model id"),
+) -> None:
+    """Save a setting, e.g. `pithy config set together.model <model id>`."""
+    _run(config.set_value, key, value)
+    console.print(f"✓ Set {key} = {value.strip()}")
+
+
+@config_app.command("unset")
+def config_unset(key: str) -> None:
+    """Remove a setting so the default applies."""
+    _run(config.unset, key)
+    console.print(f"✓ Unset {key}")
+
+
+@config_app.command("list")
+def config_list() -> None:
+    """Show the provider and models in effect, and where each comes from."""
+    settings = _run(config.load)
+
+    if provider := os.environ.get("PITHY_PROVIDER"):
+        where = "env"
+    elif provider := settings.get("provider"):
+        where = "config"
+    else:
+        provider, where = "first provider with a key", "default"
+    console.print(f"\n[bold]Provider:[/bold] {provider} [dim]({where})[/dim]")
+    if model := os.environ.get("PITHY_MODEL"):
+        console.print(f"[bold]Model:[/bold] {model} [dim](env, overrides both)[/dim]")
+
+    table = Table("Provider", "Model", "Fast model")
+    for name, spec in PROVIDERS.items():
+        saved = settings.get(name, {})
+        cells = [
+            f"{saved[k]} [dim](config)[/dim]"
+            if k in saved
+            else f"{default} [dim](default)[/dim]"
+            for k, default in (("model", spec.regular), ("fast-model", spec.fast))
+        ]
+        table.add_row(name, *cells)
+    console.print(table)
+    console.print(f"[dim]Config file: {config.config_path()}[/dim]")
 
 
 # Skills commands

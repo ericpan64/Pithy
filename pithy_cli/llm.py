@@ -1,7 +1,7 @@
 """LLM provider table and clients."""
 
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
 
@@ -22,7 +22,8 @@ class ProviderSpec:
     fast: str
     base_url: str | None = None  # None → Anthropic SDK, else OpenAI-compatible
     token_param: str = "max_tokens"
-    params: dict[str, Any] = field(default_factory=dict)  # for the default models
+    params: dict[str, Any] = field(default_factory=dict)  # sent with every model
+    default_params: dict[str, Any] = field(default_factory=dict)  # built-in models only
 
 
 # Order matters: the first provider with a key is used unless PITHY_PROVIDER is set
@@ -39,14 +40,14 @@ PROVIDERS: dict[str, ProviderSpec] = {
         base_url="https://api.openai.com/v1",
         # Reasoning models: reject max_tokens, and reasoning tokens count toward the cap
         token_param="max_completion_tokens",
-        params={"reasoning_effort": "low"},
+        default_params={"reasoning_effort": "low"},
     ),
     "together": ProviderSpec(
         env_var="TOGETHER_API_KEY",
         regular="moonshotai/Kimi-K3",
         fast="Qwen/Qwen3.5-9B",
         base_url="https://api.together.ai/v1",
-        # Both models are hybrid reasoners with thinking on by default
+        # Many Together models are hybrid reasoners with thinking on by default
         params={"extra_body": {"reasoning": {"enabled": False}}},
     ),
 }
@@ -115,6 +116,7 @@ class OpenAICompatClient:
     api_key: str
     model: str
     spec: ProviderSpec
+    params: dict[str, Any] = field(default_factory=dict)
 
     def complete(
         self,
@@ -126,7 +128,7 @@ class OpenAICompatClient:
     ) -> str:
         from openai import OpenAI
 
-        kwargs: dict[str, Any] = {self.spec.token_param: max_tokens, **self.spec.params}
+        kwargs: dict[str, Any] = {self.spec.token_param: max_tokens, **self.params}
         if schema is not None:
             kwargs["response_format"] = {
                 "type": "json_schema",
@@ -156,36 +158,52 @@ def create_client(
     if spec is None:
         raise ValueError(f"Unsupported provider: {provider}")
 
-    if model and model not in (spec.regular, spec.fast):
-        # Default-model params (e.g. reasoning_effort) may not apply to an override
-        spec = replace(spec, params={})
     model = model or (spec.fast if model_type == ModelType.FAST else spec.regular)
     if spec.base_url is None:
         return AnthropicClient(api_key=api_key, model=model)
-    return OpenAICompatClient(api_key=api_key, model=model, spec=spec)
+
+    # Options like reasoning_effort may not apply to a custom model
+    params = dict(spec.params)
+    if model in (spec.regular, spec.fast):
+        params.update(spec.default_params)
+    return OpenAICompatClient(api_key=api_key, model=model, spec=spec, params=params)
 
 
 def resolve_client(model_type: ModelType = ModelType.REGULAR) -> LLMClient:
     """
     Pick a provider and build its client.
 
-    PITHY_PROVIDER forces a provider and PITHY_MODEL overrides the model;
-    otherwise the first provider in PROVIDERS with a key wins.
+    Env vars beat the config file (`pithy config`), which beats the defaults:
+    provider is PITHY_PROVIDER, then config `provider`, then the first provider
+    in PROVIDERS with a key; model is PITHY_MODEL, then config
+    `<provider>.model` (or `.fast-model` for FAST), then the provider default.
     """
+    from .config import config_path, load
     from .keys import get_key
 
-    forced = os.environ.get("PITHY_PROVIDER")
+    settings = load()
+    source = ""
+    if forced := os.environ.get("PITHY_PROVIDER"):
+        source = "PITHY_PROVIDER"
+    elif forced := settings.get("provider"):
+        source = f"provider in {config_path()}"
     names = [forced] if forced else list(PROVIDERS)
 
     for name in names:
         if name not in PROVIDERS:
             raise ValueError(
-                f"Unknown PITHY_PROVIDER '{name}'. Choose from: {', '.join(PROVIDERS)}"
+                f"Unknown {source} '{name}'. Choose from: {', '.join(PROVIDERS)}"
             )
         if key := get_key(name):
-            return create_client(name, key, model_type, os.environ.get("PITHY_MODEL"))
+            model_key = "fast-model" if model_type == ModelType.FAST else "model"
+            model = os.environ.get("PITHY_MODEL") or settings.get(name, {}).get(
+                model_key
+            )
+            return create_client(name, key, model_type, model)
 
     raise ValueError(
-        "No API key found. Set one with:\n"
+        "No API key found"
+        + (f" for {forced} (set by {source})" if forced else "")
+        + ". Set one with:\n"
         + "\n".join(f"  pithy keys set {name}" for name in names)
     )

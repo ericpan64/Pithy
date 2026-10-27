@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from pithy_cli import config
 from pithy_cli.llm import (
     PROVIDERS,
     AnthropicClient,
@@ -53,8 +54,14 @@ def test_create_client_model_override_drops_default_params():
     default = create_client("openai", "test-key")
     custom = create_client("openai", "test-key", model="custom-model")
 
-    assert default.spec.params == {"reasoning_effort": "low"}
-    assert custom.spec.params == {}
+    assert default.params == {"reasoning_effort": "low"}
+    assert custom.params == {}
+
+
+def test_create_client_override_keeps_provider_params():
+    client = create_client("together", "test-key", model="custom/model")
+
+    assert client.params == {"extra_body": {"reasoning": {"enabled": False}}}
 
 
 def test_create_client_invalid_provider():
@@ -159,8 +166,7 @@ def test_resolve_client_forced_provider(monkeypatch):
 
     client = resolve_client()
 
-    assert client.spec.base_url == PROVIDERS["together"].base_url
-    assert client.spec.params == {}  # default-model params dropped for an override
+    assert client.spec is PROVIDERS["together"]
     assert client.model == "some/model"
 
 
@@ -179,3 +185,46 @@ def test_resolve_client_reads_keychain(memory_keyring):
     assert isinstance(client, AnthropicClient)
     assert client.api_key == "sk-ant"
     assert client.model == PROVIDERS["anthropic"].fast
+
+
+# resolve_client with saved config
+
+
+def test_resolve_client_config_provider_and_models(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "oa-key")
+    monkeypatch.setenv("TOGETHER_API_KEY", "tg-key")
+    config.set_value("provider", "together")
+    config.set_value("together.model", "big/model")
+    config.set_value("together.fast-model", "small/model")
+
+    assert resolve_client().model == "big/model"
+    assert resolve_client(ModelType.FAST).model == "small/model"
+
+
+def test_resolve_client_config_model_not_used_for_fast(monkeypatch):
+    monkeypatch.setenv("TOGETHER_API_KEY", "tg-key")
+    config.set_value("together.model", "big/model")
+
+    assert resolve_client(ModelType.FAST).model == PROVIDERS["together"].fast
+
+
+def test_resolve_client_env_beats_config(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "oa-key")
+    monkeypatch.setenv("TOGETHER_API_KEY", "tg-key")
+    config.set_value("provider", "together")
+    config.set_value("openai.model", "config-model")
+    monkeypatch.setenv("PITHY_PROVIDER", "openai")
+    monkeypatch.setenv("PITHY_MODEL", "env-model")
+
+    client = resolve_client()
+
+    assert client.spec is PROVIDERS["openai"]
+    assert client.model == "env-model"
+
+
+def test_resolve_client_config_provider_without_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "oa-key")
+    config.set_value("provider", "together")
+
+    with pytest.raises(ValueError, match="for together \\(set by provider in"):
+        resolve_client()
