@@ -12,6 +12,7 @@ import pytest
 from typer.testing import CliRunner
 
 from pithy_cli.cli import app
+from pithy_cli.skills import format_file
 from pithy_cli.summarize import _is_text_file, build_context, list_files
 
 runner = CliRunner()
@@ -98,8 +99,11 @@ def test_build_context_budget_notes_omitted(project):
 
 
 def test_build_context_reads_only_budget(project):
-    (project / "big.txt").write_text("y" * 10_000)
-    root, files = list_files(project, [])
+    big = project / "big.txt"
+    big.write_text("y" * 10_000)
+    max_chars = 500
+    # Remaining allowance after the file list and the file's header
+    budget = max_chars - len("Files:\n- big.txt") - len(format_file("big.txt", ""))
     real_open = Path.open
     reads = []
 
@@ -111,10 +115,10 @@ def test_build_context_reads_only_budget(project):
         return f
 
     with patch.object(Path, "open", tracking_open):
-        context = build_context(root, files, max_chars=500)
+        context = build_context(project, [big], max_chars=max_chars)
 
     assert "--- big.txt ---" not in context
-    assert reads and all(0 <= n <= 500 for n in reads)
+    assert reads == [budget + 1]  # one past the allowance, to detect overflow
 
 
 def test_is_text_file_tolerates_cut_multibyte_char(tmp_path):
