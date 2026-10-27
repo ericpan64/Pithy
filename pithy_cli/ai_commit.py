@@ -1,39 +1,38 @@
 """AI-powered git commit message generation."""
 
-import sys
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 import typer
 from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt
 
 from .git import (
     format_commit_message,
+    format_summary,
     get_branch_name,
+    get_recent_subjects,
     get_repo_name,
     get_staged_diff,
     has_staged_changes,
-    install_git_hook,
-    read_commit_msg,
-    uninstall_git_hook,
-    write_commit_msg,
 )
-from .keys import Provider, get_provider_key
-from .llm import (
-    LLMProvider,
-    ModelType,
-    create_llm_client,
-    generate_summary,
-    generate_titles,
-)
+from .llm import resolve_client
+from .skills import load_skill
 
-console = Console()
-error_console = Console(file=sys.stderr)
+status_console = Console(stderr=True)
 
-AiCommitAction = Literal["install", "uninstall", "hook", "generate"]
+COMMIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "array", "items": {"type": "string"}},
+        "titles": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    },
+    "required": ["summary", "titles"],
+    "additionalProperties": False,
+}
+
+# prepare-commit-msg sources that already have a message
+SKIP_SOURCES = {"merge", "squash", "commit", "message"}
 
 
 @dataclass
@@ -44,289 +43,69 @@ class CommitMessage:
     titles: list[str]
 
 
-def get_provider_config() -> tuple[LLMProvider, str]:
-    """
-    Get LLM provider and API key from keystore or environment.
-
-    Returns:
-        Tuple of (provider, api_key)
-    """
-    # Map Provider enum to LLMProvider enum
-    provider_map = {
-        Provider.ANTHROPIC: LLMProvider.ANTHROPIC,
-        Provider.OPENAI: LLMProvider.OPENAI,
-    }
-
-    # Try each provider in order
-    for provider, llm_provider in provider_map.items():
-        if key := get_provider_key(provider):
-            return llm_provider, key
-
-    # Check environment as fallback
-    import os
-
-    if key := os.environ.get("ANTHROPIC_API_KEY"):
-        return LLMProvider.ANTHROPIC, key
-    if key := os.environ.get("OPENAI_API_KEY"):
-        return LLMProvider.OPENAI, key
-
-    from .keys import PROVIDER_KEYS
-
-    raise ValueError(
-        "No API key found. Set one with:\n"
-        f"  pithy keys set {PROVIDER_KEYS[Provider.ANTHROPIC]}\n"
-        "  or\n"
-        f"  pithy keys set {PROVIDER_KEYS[Provider.OPENAI]}"
+def build_commit_input(titles_count: int) -> str:
+    """Build the user message: repo context, recent subjects, and staged diff."""
+    subjects = "\n".join(f"- {s}" for s in get_recent_subjects()) or "(none)"
+    return (
+        f"Repository: {get_repo_name()}\n"
+        f"Branch: {get_branch_name()}\n"
+        f"Number of titles: {titles_count}\n\n"
+        f"Recent commit subjects:\n{subjects}\n\n"
+        f"Staged changes (git diff):\n```\n{get_staged_diff()}\n```"
     )
 
 
-def generate_commit_message(
-    titles_count: int = 3,
-    max_diff_bytes: int = 120_000,
-) -> CommitMessage:
-    """
-    Generate commit message from staged changes.
-
-    Pure business logic - delegates all effects to helper functions.
-    """
-    # Validate preconditions
+def generate_commit_message(titles_count: int = 1) -> CommitMessage:
+    """Generate a summary and title options from staged changes in one call."""
     if not has_staged_changes():
         raise ValueError("No staged changes detected")
 
-    # Get git context
-    diff = get_staged_diff(max_diff_bytes)
-    repo_name = get_repo_name()
-    branch = get_branch_name()
+    skill = load_skill("commit-message")
+    client = resolve_client(skill.model_type)
 
-    # Get LLM configuration
-    provider, api_key = get_provider_config()
-    client = create_llm_client(provider, api_key, model_type=ModelType.REGULAR)
-
-    # Phase 1: Generate summary from diff
-    with console.status("[bold green]Analyzing changes...", spinner="dots"):
-        summary = generate_summary(
-            client=client,
-            diff=diff,
-            repo_name=repo_name,
-            branch=branch,
+    with status_console.status("Generating commit message...", spinner="dots"):
+        response = client.complete(
+            skill.body,
+            build_commit_input(titles_count),
+            max_tokens=2000,
+            schema=COMMIT_SCHEMA,
         )
 
-    # Phase 2: Generate commit titles from summary
-    with console.status("[bold green]Generating commit messages...", spinner="dots"):
-        titles = generate_titles(
-            client=client,
-            summary=summary,
-            count=titles_count,
-        )
-
-    return CommitMessage(summary=summary, titles=titles)
+    data = json.loads(response)
+    if not data["titles"]:
+        raise ValueError("Model returned no commit titles")
+    return CommitMessage(summary=data["summary"], titles=data["titles"][:titles_count])
 
 
-def interactive_selection(message: CommitMessage, existing: str = "") -> str | None:
+def run_hook(file: str, source: str | None = None) -> None:
     """
-    Interactive commit message selection with rich UI.
+    prepare-commit-msg handler: prepend a generated message to the commit file.
 
-    Returns:
-        Selected commit title, or None if cancelled
+    git then opens the editor on it for review. Errors are reported but never
+    block the commit.
     """
-    console.print()
-    console.print(
-        Panel.fit(
-            "🤖 [bold cyan]AI Commit Message Generator[/bold cyan]", border_style="cyan"
-        )
-    )
+    if source in SKIP_SOURCES or not has_staged_changes():
+        return
 
-    # Show existing message if present
-    if existing.strip():
-        console.print("\n[yellow]📝 Existing commit message:[/yellow]")
-        for line in existing.split("\n")[:5]:
-            if not line.strip().startswith("#"):
-                console.print(f"   {line}")
+    try:
+        message = generate_commit_message()
+        path = Path(file)
+        existing = path.read_text() if path.exists() else ""
+        text = format_commit_message(message.titles[0], message.summary)
+        path.write_text(f"{text}\n{existing}")
+    except Exception as e:
+        status_console.print(f"[red]Pithy: could not generate a message: {e}[/red]")
 
-    # Show summary
-    console.print("\n[bold]📋 Summary of changes:[/bold]")
-    for point in message.summary:
-        console.print(f"   • {point}", style="dim")
 
-    # Show title options
-    console.print("\n[bold]🎯 Select a commit message:[/bold]")
+def run_generate(titles: int = 3, json_output: bool = False) -> None:
+    """Print title options and a summary for the staged changes."""
+    message = generate_commit_message(titles_count=titles)
+
+    if json_output:
+        typer.echo(json.dumps({"summary": message.summary, "titles": message.titles}))
+        return
+
     for i, title in enumerate(message.titles, 1):
-        console.print(f"   [cyan]{i}.[/cyan] {title}")
-
-    console.print()
-
-    # Interactive prompt
-    while True:
-        choice = Prompt.ask(
-            "→ Select",
-            choices=[str(i) for i in range(1, len(message.titles) + 1)] + ["e", "q"],
-            default="1",
-            show_choices=True,
-        )
-
-        if choice == "q":
-            console.print("[yellow]   Cancelled[/yellow]")
-            return None
-
-        if choice == "e":
-            custom: str = Prompt.ask("   Enter custom commit message")
-            if custom.strip():
-                return custom.strip()
-            continue
-
-        # Parse as number
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(message.titles):
-                return message.titles[idx]
-        except ValueError:
-            pass
-
-
-def write_non_interactive_message(file_path: str, message: CommitMessage):
-    """Write all options as commented message for non-interactive mode."""
-    lines = [
-        "# 🤖 AI generated commits - Uncomment one:",
-        "#",
-    ]
-
-    for title in message.titles:
-        full_msg = format_commit_message(title, message.summary)
-        for line in full_msg.split("\n"):
-            lines.append(f"# {line}")
-        lines.append("#")
-
-    write_commit_msg(file_path, "\n".join(lines))
-
-
-def run_hook(
-    file: str,
-    source: str | None = None,
-    titles: int = 3,
-    non_interactive: bool = False,
-) -> None:
-    """
-    Git hook handler - called by prepare-commit-msg hook.
-
-    This is the effect boundary - all I/O happens here.
-    """
-    # Guard: Skip special commits
-    if source in ["merge", "squash", "commit", "message", "template"]:
-        return
-
-    # Guard: Skip if no staged changes
-    if not has_staged_changes():
-        return
-
-    try:
-        # Generate commit message
-        message = generate_commit_message(titles_count=titles)
-
-        # Interactive or non-interactive mode
-        if non_interactive or not sys.stdin.isatty():
-            write_non_interactive_message(file, message)
-        else:
-            existing = read_commit_msg(file) or ""
-            selected = interactive_selection(message, existing)
-
-            if selected:
-                full_message = format_commit_message(selected, message.summary)
-                write_commit_msg(file, full_message)
-                console.print("[green]✅ Commit message saved![/green]")
-
-    except Exception as e:
-        error_console.print(f"[red]❌ Error: {e}[/red]")
-        # Don't fail the git commit - just show error
-        return
-
-
-def run_generate(
-    titles: int = 3,
-    apply: bool = False,
-    json_output: bool = False,
-) -> None:
-    """
-    Generate commit message manually (not from hook).
-
-    Args:
-        titles: Number of title options to generate
-        apply: Write message to COMMIT_EDITMSG
-        json_output: Output as JSON instead of interactive
-    """
-    try:
-        message = generate_commit_message(titles_count=titles)
-
-        if json_output:
-            output = {
-                "summary": message.summary,
-                "titles": message.titles,
-            }
-            console.print_json(data=output)
-            return
-
-        if apply:
-            # Write to git commit message file
-            commit_msg_file = Path(".git/COMMIT_EDITMSG")
-            if not commit_msg_file.exists():
-                error_console.print("[red]Not in a git repository[/red]")
-                raise typer.Exit(1)
-
-            selected = interactive_selection(message)
-            if selected:
-                full_message = format_commit_message(selected, message.summary)
-                write_commit_msg(str(commit_msg_file), full_message)
-                console.print(
-                    "[green]✅ Message written to .git/COMMIT_EDITMSG[/green]"
-                )
-            return
-
-        # Interactive mode - just show options
-        selected = interactive_selection(message)
-        if selected:
-            full_message = format_commit_message(selected, message.summary)
-            console.print("\n[bold green]Selected message:[/bold green]")
-            console.print(Panel(full_message, border_style="green"))
-
-    except Exception as e:
-        error_console.print(f"[red]❌ Error: {e}[/red]")
-        raise typer.Exit(1) from e
-
-
-def run_ai_commit(action: AiCommitAction, **kwargs) -> None:
-    """
-    Main entry point for ai-commit command.
-
-    Routes to appropriate handler based on action.
-    """
-    if action == "install":
-        titles = kwargs.get("titles", 3)
-
-        hook_path = install_git_hook(titles=titles)
-        console.print(f"[green]✅ Git hook installed at:[/green] {hook_path}")
-
-    elif action == "uninstall":
-        hook_path = uninstall_git_hook()
-        if hook_path:
-            console.print(f"[green]✅ Git hook uninstalled:[/green] {hook_path}")
-        else:
-            console.print("[yellow]ℹ Hook not found[/yellow]")
-
-    elif action == "hook":
-        # Called by git hook
-        file = kwargs["file"]
-        source = kwargs.get("source")
-        titles = kwargs.get("titles", 3)
-        non_interactive = kwargs.get("non_interactive", False)
-
-        run_hook(file, source, titles, non_interactive)
-
-    elif action == "generate":
-        titles = kwargs.get("titles", 3)
-        apply = kwargs.get("apply", False)
-        json_output = kwargs.get("json", False)
-
-        run_generate(titles, apply, json_output)
-
-    else:
-        error_console.print(f"[red]Unknown action: {action}[/red]")
-        raise typer.Exit(1)
+        typer.echo(f"{i}. {title}")
+    typer.echo("")
+    typer.echo(format_summary(message.summary))
