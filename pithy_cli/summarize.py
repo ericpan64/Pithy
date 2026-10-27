@@ -23,6 +23,7 @@ def list_files(target: Path, excludes: list[str]) -> tuple[Path, list[Path]]:
     root = require_root()
     output = git(
         "ls-files",
+        "-z",
         "--cached",
         "--others",
         "--exclude-standard",
@@ -33,16 +34,20 @@ def list_files(target: Path, excludes: list[str]) -> tuple[Path, list[Path]]:
     patterns = excludes + DEFAULT_EXCLUDES
 
     files = []
-    for rel in output.splitlines():
-        if any(
-            fnmatch.fnmatch(rel, pat) or fnmatch.fnmatch(Path(rel).name, pat)
-            for pat in patterns
-        ):
+    for rel in filter(None, output.split("\0")):
+        if any(_excluded(rel, pat) for pat in patterns):
             continue
         path = root / rel
         if path.is_file():
             files.append(path)
     return root, files
+
+
+def _excluded(rel: str, pattern: str) -> bool:
+    """Match a glob against the path or filename; 'dir/' matches a directory anywhere."""
+    if pattern.endswith("/"):
+        return f"/{pattern}" in f"/{rel}"
+    return fnmatch.fnmatch(rel, pattern) or fnmatch.fnmatch(Path(rel).name, pattern)
 
 
 def _is_text_file(path: Path, sample_bytes: int = 4096) -> bool:
@@ -76,10 +81,14 @@ def build_context(root: Path, files: list[Path], max_chars: int) -> str:
     for path, rel in zip(files, rel_paths, strict=True):
         if not _is_text_file(path):
             continue
-        block = format_file(rel, path.read_text(encoding="utf-8", errors="ignore"))
-        if used + len(block) > max_chars:
+        # Read at most one character past the budget to detect overflow
+        budget = max_chars - used - len(format_file(rel, ""))
+        with path.open(encoding="utf-8", errors="ignore") as f:
+            content = f.read(budget + 1) if budget >= 0 else ""
+        if budget < 0 or len(content) > budget:
             omitted.append(rel)
             continue
+        block = format_file(rel, content)
         parts.append(block)
         used += len(block)
 

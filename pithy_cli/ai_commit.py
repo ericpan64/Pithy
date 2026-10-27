@@ -25,14 +25,14 @@ COMMIT_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "array", "items": {"type": "string"}},
-        "titles": {"type": "array", "items": {"type": "string"}},
+        "titles": {"type": "array", "items": {"type": "string"}, "minItems": 1},
     },
     "required": ["summary", "titles"],
     "additionalProperties": False,
 }
 
 # prepare-commit-msg sources that already have a message
-SKIP_SOURCES = {"merge", "squash", "commit", "message", "template"}
+SKIP_SOURCES = {"merge", "squash", "commit", "message"}
 
 
 @dataclass
@@ -72,6 +72,8 @@ def generate_commit_message(titles_count: int = 1) -> CommitMessage:
         )
 
     data = json.loads(response)
+    if not data["titles"]:
+        raise ValueError("Model returned no commit titles")
     return CommitMessage(summary=data["summary"], titles=data["titles"][:titles_count])
 
 

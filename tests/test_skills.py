@@ -103,6 +103,22 @@ def test_parse_skill_bad_model(tmp_path):
         parse_skill(skill_dir)
 
 
+def test_parse_skill_invalid_yaml(tmp_path):
+    skill_dir = _write_skill(tmp_path, "review", "name: review\ndescription: [unclosed")
+
+    with pytest.raises(ValueError, match="invalid YAML"):
+        parse_skill(skill_dir)
+
+
+def test_parse_skill_metadata_must_be_mapping(tmp_path):
+    skill_dir = _write_skill(
+        tmp_path, "review", "name: review\ndescription: x\nmetadata: fast"
+    )
+
+    with pytest.raises(ValueError, match="metadata must be"):
+        parse_skill(skill_dir)
+
+
 def test_builtin_skills_are_valid(tmp_path):
     for name, (path, source) in discover(tmp_path).items():
         assert source == "built-in"
@@ -155,6 +171,19 @@ def test_new_skill_invalid_name(git_repo):
         new_skill("Bad Name")
 
 
+def test_new_skill_blank_description_uses_placeholder(git_repo):
+    skill_md = new_skill("demo", "   ", git_repo)
+
+    assert parse_skill(skill_md.parent).description.startswith("TODO")
+
+
+def test_new_skill_description_too_long(git_repo):
+    with pytest.raises(ValueError, match="1024"):
+        new_skill("demo", "x" * 1025, git_repo)
+
+    assert not (git_repo / ".agents/skills/demo").exists()
+
+
 def test_edit_builtin_copies_to_project(git_repo):
     skill_md = edit_skill("commit-message")
 
@@ -198,6 +227,13 @@ def test_cli_skills_run_with_files(git_repo):
     assert run.call_args.args == ("repo-overview", "--- a.txt ---\nalpha")
 
 
+def test_cli_skills_run_missing_file(git_repo):
+    result = runner.invoke(app, ["skills", "run", "repo-overview", "nope.txt"])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+
+
 def test_cli_skills_run_with_stdin(git_repo):
     with patch("pithy_cli.skills.run_skill", return_value="done") as run:
         result = runner.invoke(app, ["skills", "run", "repo-overview"], input="piped")
@@ -213,6 +249,22 @@ def test_cli_skills_new_opens_editor(git_repo):
     assert result.exit_code == 0
     editor.assert_called_once()
     assert "saved" in result.stdout
+
+
+def test_cli_skills_new_missing_editor(git_repo):
+    with patch("pithy_cli.skills.open_in_editor", side_effect=FileNotFoundError("vi")):
+        result = runner.invoke(app, ["skills", "new", "demo"])
+
+    assert result.exit_code == 1
+    assert "Error:" in result.output
+
+
+def test_cli_skills_new_editor_failure(git_repo):
+    with patch("pithy_cli.skills.open_in_editor", return_value=1):
+        result = runner.invoke(app, ["skills", "new", "demo"])
+
+    assert result.exit_code == 1
+    assert "saved" not in result.output
 
 
 def test_cli_skills_list_shows_invalid(git_repo):

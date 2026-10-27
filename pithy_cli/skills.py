@@ -54,7 +54,10 @@ def parse_skill(skill_dir: Path, source: str = "project") -> Skill:
     if not match:
         raise ValueError(f"{skill_md}: missing YAML frontmatter")
 
-    meta = yaml.safe_load(match.group(1)) or {}
+    try:
+        meta = yaml.safe_load(match.group(1)) or {}
+    except yaml.YAMLError as e:
+        raise ValueError(f"{skill_md}: invalid YAML frontmatter: {e}") from e
     if not isinstance(meta, dict):
         raise ValueError(f"{skill_md}: frontmatter must be a YAML mapping")
 
@@ -70,6 +73,8 @@ def parse_skill(skill_dir: Path, source: str = "project") -> Skill:
         raise ValueError(f"{skill_md}: description must be 1-1024 characters")
 
     metadata = meta.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise ValueError(f"{skill_md}: metadata must be a YAML mapping")
     try:
         model_type = ModelType(metadata.get("pithy-model", "regular"))
     except ValueError as e:
@@ -123,6 +128,9 @@ def load_skill(name: str, git_root: Path | None = None) -> Skill:
 def new_skill(name: str, description: str = "", git_root: Path | None = None) -> Path:
     """Scaffold .agents/skills/<name>/SKILL.md and return its path."""
     validate_name(name)
+    description = description.strip()
+    if len(description) > 1024:
+        raise ValueError("Description must be at most 1024 characters")
     skill_dir = project_skills_dir(git_root) / name
     if skill_dir.exists():
         raise ValueError(f"Skill '{name}' already exists at {skill_dir}")

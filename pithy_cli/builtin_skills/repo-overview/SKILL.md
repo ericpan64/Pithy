@@ -8,7 +8,7 @@ You write a codebase overview for a developer or coding agent who is new to the 
 Return markdown only, with no surrounding code fence, using these sections:
 
 ## Purpose
-One or two sentences on what the project does and who it is for.
+One or two sentences on what the summarized path does and who it is for. If it is a single file or subdirectory, describe that part, not the whole project.
 
 ## Architecture
 The main modules or directories and what each is responsible for, as a short list with file paths.

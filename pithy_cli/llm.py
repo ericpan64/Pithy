@@ -1,7 +1,7 @@
 """LLM provider table and clients."""
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any, Protocol
 
@@ -22,7 +22,7 @@ class ProviderSpec:
     fast: str
     base_url: str | None = None  # None → Anthropic SDK, else OpenAI-compatible
     token_param: str = "max_tokens"
-    params: dict[str, Any] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)  # for the default models
 
 
 # Order matters: the first provider with a key is used unless PITHY_PROVIDER is set
@@ -97,9 +97,15 @@ class AnthropicClient:
             messages=[{"role": "user", "content": user}],
             **kwargs,
         )
-        return next(
-            str(block.text) for block in response.content if block.type == "text"
+        text = next(
+            (str(block.text) for block in response.content if block.type == "text"),
+            None,
         )
+        if text is None:
+            raise ValueError(
+                f"Response contained no text (stop reason: {response.stop_reason})"
+            )
+        return text
 
 
 @dataclass
@@ -124,7 +130,7 @@ class OpenAICompatClient:
         if schema is not None:
             kwargs["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {"name": "response", "schema": schema},
+                "json_schema": {"name": "response", "schema": schema, "strict": True},
             }
 
         client = OpenAI(api_key=self.api_key, base_url=self.spec.base_url)
@@ -150,6 +156,9 @@ def create_client(
     if spec is None:
         raise ValueError(f"Unsupported provider: {provider}")
 
+    if model and model not in (spec.regular, spec.fast):
+        # Default-model params (e.g. reasoning_effort) may not apply to an override
+        spec = replace(spec, params={})
     model = model or (spec.fast if model_type == ModelType.FAST else spec.regular)
     if spec.base_url is None:
         return AnthropicClient(api_key=api_key, model=model)

@@ -163,8 +163,10 @@ def skills_run(
 ) -> None:
     """Run a skill on files or stdin and print the result."""
     if paths:
-        user_input = "\n\n".join(
-            skills.format_file(str(p), p.read_text(encoding="utf-8")) for p in paths
+        user_input = _run(
+            lambda: "\n\n".join(
+                skills.format_file(str(p), p.read_text(encoding="utf-8")) for p in paths
+            )
         )
     elif not sys.stdin.isatty():
         user_input = sys.stdin.read()
@@ -176,9 +178,10 @@ def skills_run(
 
 
 def _edit_and_validate(skill_md: Path) -> None:
-    exit_code = skills.open_in_editor(skill_md)
+    exit_code = _run(skills.open_in_editor, skill_md)
     if exit_code != 0:
-        console.print(f"⚠️  Editor exited with code {exit_code}", style="yellow")
+        typer.echo(f"Error: editor exited with code {exit_code}", err=True)
+        raise typer.Exit(1)
     try:
         skill = skills.parse_skill(skill_md.parent)
     except ValueError as e:

@@ -49,6 +49,14 @@ def test_create_client_model_override():
     assert client.model == "custom-model"
 
 
+def test_create_client_model_override_drops_default_params():
+    default = create_client("openai", "test-key")
+    custom = create_client("openai", "test-key", model="custom-model")
+
+    assert default.spec.params == {"reasoning_effort": "low"}
+    assert custom.spec.params == {}
+
+
 def test_create_client_invalid_provider():
     with pytest.raises(ValueError, match="Unsupported provider"):
         create_client("invalid", "test-key")
@@ -151,7 +159,8 @@ def test_resolve_client_forced_provider(monkeypatch):
 
     client = resolve_client()
 
-    assert client.spec is PROVIDERS["together"]
+    assert client.spec.base_url == PROVIDERS["together"].base_url
+    assert client.spec.params == {}  # default-model params dropped for an override
     assert client.model == "some/model"
 
 

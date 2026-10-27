@@ -121,8 +121,11 @@ def install_git_hook(force: bool = False) -> Path:
         )
 
     hook_path.parent.mkdir(parents=True, exist_ok=True)
+    # Never block a commit: skip if pithy is missing and ignore its failures
     hook_path.write_text(
-        f'#!/bin/sh\n{HOOK_MARKER}\npithy ai-commit hook "$1" ${{2:+--source "$2"}}\n'
+        f"#!/bin/sh\n{HOOK_MARKER}\n"
+        "command -v pithy >/dev/null 2>&1 || exit 0\n"
+        'pithy ai-commit hook "$1" ${2:+--source "$2"} || true\n'
     )
     hook_path.chmod(0o755)
 

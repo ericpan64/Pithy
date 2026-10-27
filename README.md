@@ -53,6 +53,8 @@ pithy keys remove anthropic
 
 The first provider with a key is used, in the order anthropic, openai, together.
 Override with `PITHY_PROVIDER=together` and, optionally, `PITHY_MODEL=<model id>`.
+Provider-specific options tuned for the default models (such as OpenAI's
+`reasoning_effort`) are not sent with a `PITHY_MODEL` override.
 
 ### AI commit messages
 
@@ -85,7 +87,8 @@ pithy summarize src/ -o AGENTS.md  # write to a file
 pithy summarize . -x "tests/*"     # exclude globs (repeatable)
 ```
 
-Binary files and `*.lock`, `*.min.*`, `package-lock.json` are skipped. File contents
+Binary files are listed by path but their contents are not sent; `*.lock`,
+`*.min.*`, and `package-lock.json` are skipped entirely. File contents
 are capped by `--max-chars` (default 400,000); files over the budget are still
 listed, and the overview notes they were omitted.
 

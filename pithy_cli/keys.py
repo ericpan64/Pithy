@@ -4,6 +4,7 @@ import getpass
 import os
 
 import keyring
+from keyring.errors import KeyringError
 
 from .llm import PROVIDERS
 
@@ -17,12 +18,18 @@ def _check_provider(provider: str) -> None:
         )
 
 
+def _stored_key(provider: str) -> str | None:
+    """Read a key from the keychain, treating an unavailable keychain as empty."""
+    try:
+        return keyring.get_password(SERVICE, provider)
+    except KeyringError:
+        return None
+
+
 def get_key(provider: str) -> str | None:
     """Get a provider's API key from its env var, falling back to the keychain."""
     _check_provider(provider)
-    return os.environ.get(PROVIDERS[provider].env_var) or keyring.get_password(
-        SERVICE, provider
-    )
+    return os.environ.get(PROVIDERS[provider].env_var) or _stored_key(provider)
 
 
 def set_key(provider: str, value: str | None = None) -> None:
@@ -66,7 +73,7 @@ def key_status() -> dict[str, str]:
     for provider, spec in PROVIDERS.items():
         if os.environ.get(spec.env_var):
             status[provider] = "env"
-        elif keyring.get_password(SERVICE, provider) is not None:
+        elif _stored_key(provider) is not None:
             status[provider] = "keychain"
         else:
             status[provider] = ""

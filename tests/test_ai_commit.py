@@ -201,7 +201,7 @@ def test_run_hook_prepends_message_and_keeps_comments(mock_generate, git_repo):
     )
 
 
-@pytest.mark.parametrize("source", ["message", "merge", "commit"])
+@pytest.mark.parametrize("source", ["message", "merge", "squash", "commit"])
 @patch("pithy_cli.ai_commit.generate_commit_message")
 def test_run_hook_skips_sources_with_messages(mock_generate, source, git_repo):
     _stage(git_repo)
@@ -212,6 +212,18 @@ def test_run_hook_skips_sources_with_messages(mock_generate, source, git_repo):
 
     mock_generate.assert_not_called()
     assert msg_file.read_text() == "my message\n"
+
+
+@patch("pithy_cli.ai_commit.generate_commit_message")
+def test_run_hook_drafts_for_template_source(mock_generate, git_repo):
+    _stage(git_repo)
+    mock_generate.return_value = CommitMessage([], ["feat: add x"])
+    msg_file = git_repo / ".git/COMMIT_EDITMSG"
+    msg_file.write_text("Ticket: \n")
+
+    run_hook(str(msg_file), "template")
+
+    assert msg_file.read_text() == "feat: add x\nTicket: \n"
 
 
 @patch("pithy_cli.ai_commit.generate_commit_message", side_effect=ValueError("boom"))
